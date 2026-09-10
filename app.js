@@ -13,17 +13,63 @@ const SEASON_MONTHS = {
   Winter: ['Dec', 'Jan', 'Feb']
 };
 
-const CATEGORY_ORDER = ['Camping', 'Sites / Hikes', 'Food & Drink', 'Adventures'];
+const CATEGORY_ORDER = ['Camping', 'Things To Do', 'Food & Drink'];
 const CAMPING_SUBCATS = ['Public', 'Private', 'Boondocking'];
-const SITESHIKES_SUBCATS = ['State / Nat Parks', 'Points of Interest', 'Hikes', 'Scenic Drives', 'Sites', 'Hot Springs', 'Swim Area'];
+const THINGSTODO_SUBCATS = ['State / Nat Parks', 'Points of Interest', 'Hikes', 'Scenic Drives', 'Sites', 'Hot Springs', 'Swim Area', 'Adventures'];
 const FOODDRINK_SUBCATS = ['Food', 'Drinks'];
+
+const CATEGORY_SUBCATS = {
+  'Camping': CAMPING_SUBCATS,
+  'Things To Do': THINGSTODO_SUBCATS,
+  'Food & Drink': FOODDRINK_SUBCATS
+};
 
 const CATEGORY_COLORS = {
   'Camping': '#2f5233',
-  'Sites / Hikes': '#8b6f47',
-  'Food & Drink': '#b5493b',
-  'Adventures': '#2a5d8c'
+  'Things To Do': '#8b6f47',
+  'Food & Drink': '#b5493b'
 };
+
+// Emoji glyph per sub-category ("type"), grouped by category — the colored
+// circle behind it (CATEGORY_COLORS) tells you the category, the glyph tells
+// you the type within it.
+const CATEGORY_FALLBACK_ICON = { 'Camping': '⛺', 'Things To Do': '📍', 'Food & Drink': '🍽️' };
+const TYPE_ICONS = {
+  'Camping': { 'Public': '⛺', 'Private': '🚐', 'Boondocking': '🌲' },
+  'Things To Do': {
+    'State / Nat Parks': '🌲',
+    'Points of Interest': '📍',
+    'Hikes': '🥾',
+    'Scenic Drives': '🚗',
+    'Sites': '🏛️',
+    'Hot Springs': '♨️',
+    'Swim Area': '🏊',
+    'Adventures': '🧭'
+  },
+  'Food & Drink': { 'Food': '🍽️', 'Drinks': '🍺' }
+};
+
+function markerGlyph(p) {
+  const byCat = TYPE_ICONS[p.category];
+  return (byCat && byCat[p.subcategory]) || CATEGORY_FALLBACK_ICON[p.category] || '📍';
+}
+
+const markerIconCache = {};
+function getMarkerIcon(p) {
+  const color = CATEGORY_COLORS[p.category] || '#555';
+  const glyph = markerGlyph(p);
+  const key = color + '|' + glyph;
+  if (!markerIconCache[key]) {
+    markerIconCache[key] = L.divIcon({
+      className: 'pin-icon',
+      html: '<div class="pin-icon-inner" style="background:' + color + '">' + glyph + '</div>',
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
+      popupAnchor: [0, -15]
+    });
+  }
+  return markerIconCache[key];
+}
 
 // ---------- Local edits (localStorage) ----------
 function loadEdits() {
@@ -64,7 +110,7 @@ const filters = {
   search: '',
   categories: new Set(),
   campingSubcats: new Set(),
-  siteshikesSubcats: new Set(),
+  thingsToDoSubcats: new Set(),
   fooddrinkSubcats: new Set(),
   starlink: false,
   hatch: false,
@@ -104,7 +150,7 @@ function passesFilters(pin) {
     if (filters.bookableOnly && !p.bookable) return false;
     if (filters.nearTown && !p.near_town) return false;
   }
-  if (p.category === 'Sites / Hikes' && filters.siteshikesSubcats.size && !filters.siteshikesSubcats.has(p.subcategory)) return false;
+  if (p.category === 'Things To Do' && filters.thingsToDoSubcats.size && !filters.thingsToDoSubcats.has(p.subcategory)) return false;
   if (p.category === 'Food & Drink' && filters.fooddrinkSubcats.size && !filters.fooddrinkSubcats.has(p.subcategory)) return false;
 
   if (p.is_campground) {
@@ -168,7 +214,7 @@ function haversineMiles(lat1, lng1, lat2, lng2) {
 let map, markersLayer, currentView = 'map';
 
 function initMap() {
-  map = L.map('map', { preferCanvas: true }).setView([39.5, -119], 6);
+  map = L.map('map').setView([39.5, -119], 6);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18,
     attribution: '&copy; OpenStreetMap contributors'
@@ -184,15 +230,8 @@ function renderMap(pins) {
   pins.forEach(pin => {
     const p = effectivePin(pin);
     if (p.lat == null || p.lng == null) return;
-    const color = CATEGORY_COLORS[p.category] || '#555';
-    const marker = L.circleMarker([p.lat, p.lng], {
-      radius: 6,
-      color: color,
-      fillColor: color,
-      fillOpacity: 0.85,
-      weight: 1.5
-    });
-    marker.bindTooltip(p.name, { direction: 'top', offset: [0, -4] });
+    const marker = L.marker([p.lat, p.lng], { icon: getMarkerIcon(p) });
+    marker.bindTooltip(p.name, { direction: 'top', offset: [0, -14] });
     marker.on('click', () => openDetail(p.id));
     markersLayer.addLayer(marker);
   });
@@ -334,6 +373,11 @@ function closeDetail() {
 
 // ---------- Distance tool ----------
 let customOrigins = {};
+let distanceViewMode = 'list';
+let distanceMap = null;
+let distanceMarkersLayer = null;
+let lastDistanceResults = null; // [{pin, miles, estimated}], set after a search runs
+let lastDistanceOrigin = null;
 
 function openDistanceTool(custom) {
   const sel = document.getElementById('distance-origin');
@@ -351,6 +395,10 @@ function openDistanceTool(custom) {
   }
   document.getElementById('distance-results').innerHTML = '';
   document.getElementById('distance-status').textContent = '';
+  lastDistanceResults = null;
+  lastDistanceOrigin = null;
+  populateSubcatOptions(document.getElementById('distance-category').value, 'distance-subcat-row', 'distance-subcategory', true);
+  setDistanceViewMode('list');
   document.getElementById('distance-overlay').classList.remove('hidden');
 }
 
@@ -358,9 +406,56 @@ function closeDistanceTool() {
   document.getElementById('distance-overlay').classList.add('hidden');
 }
 
+function setDistanceViewMode(mode) {
+  distanceViewMode = mode;
+  document.getElementById('distance-view-list').classList.toggle('active', mode === 'list');
+  document.getElementById('distance-view-map').classList.toggle('active', mode === 'map');
+  document.getElementById('distance-results').classList.toggle('hidden', mode !== 'list');
+  document.getElementById('distance-map').classList.toggle('hidden', mode !== 'map');
+  if (mode === 'map' && lastDistanceResults) {
+    setTimeout(() => renderDistanceMap(lastDistanceResults, lastDistanceOrigin), 50);
+  }
+}
+
+function initOrResetDistanceMap(centerLat, centerLng, zoom) {
+  if (!distanceMap) {
+    distanceMap = L.map('distance-map').setView([centerLat, centerLng], zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(distanceMap);
+    distanceMarkersLayer = L.layerGroup().addTo(distanceMap);
+  } else {
+    distanceMap.invalidateSize();
+  }
+}
+
+function renderDistanceMap(within, origin) {
+  initOrResetDistanceMap(origin.lat, origin.lng, 8);
+  distanceMarkersLayer.clearLayers();
+  L.marker([origin.lat, origin.lng]).addTo(distanceMarkersLayer).bindPopup('<b>Starting point</b>');
+  const bounds = [[origin.lat, origin.lng]];
+  within.forEach(c => {
+    const p = effectivePin(c.pin);
+    if (p.lat == null || p.lng == null) return;
+    const marker = L.marker([p.lat, p.lng], { icon: getMarkerIcon(p) });
+    marker.bindPopup('<b>' + escapeHtml(p.name) + '</b><br>' + Math.round(c.miles * 10) / 10 + ' mi' + (c.estimated ? ' (est.)' : ''));
+    marker.on('click', () => { closeDistanceTool(); openDetail(p.id); });
+    distanceMarkersLayer.addLayer(marker);
+    bounds.push([p.lat, p.lng]);
+  });
+  if (bounds.length > 1) distanceMap.fitBounds(bounds, { padding: [24, 24] });
+  else distanceMap.setView([origin.lat, origin.lng], 8);
+}
+
 async function runDistanceSearch() {
   const originVal = document.getElementById('distance-origin').value;
-  const radius = parseFloat(document.getElementById('distance-radius').value) || 50;
+  const minMi = parseFloat(document.getElementById('distance-min').value) || 0;
+  const maxRaw = document.getElementById('distance-max').value;
+  const maxMi = maxRaw === '' ? Infinity : (parseFloat(maxRaw) || 50);
+  const categoryVal = document.getElementById('distance-category').value;
+  const subcategoryVal = document.getElementById('distance-subcategory').value;
+  const monthVal = document.getElementById('distance-month').value;
   const useDriving = document.getElementById('distance-use-driving').checked;
   const statusEl = document.getElementById('distance-status');
   const resultsEl = document.getElementById('distance-results');
@@ -373,10 +468,15 @@ async function runDistanceSearch() {
 
   statusEl.textContent = 'Calculating distances...';
 
-  let candidates = allPins()
-    .filter(p => !(origin.excludeId && p.id === origin.excludeId))
+  let basePins = allPins().filter(p => !(origin.excludeId && p.id === origin.excludeId));
+  if (categoryVal) basePins = basePins.filter(p => effectivePin(p).category === categoryVal);
+  if (subcategoryVal) basePins = basePins.filter(p => effectivePin(p).subcategory === subcategoryVal);
+  if (monthVal) basePins = basePins.filter(p => { const bm = getBestMonths(effectivePin(p)); return bm && bm.includes(monthVal); });
+
+  const prefilterCap = maxMi === Infinity ? 1000 : maxMi * 2;
+  let candidates = basePins
     .map(p => ({ pin: p, straight: haversineMiles(origin.lat, origin.lng, p.lat, p.lng) }))
-    .filter(c => c.straight <= radius * 2)
+    .filter(c => c.straight <= prefilterCap)
     .sort((a, b) => a.straight - b.straight)
     .slice(0, 300);
 
@@ -418,9 +518,13 @@ async function runDistanceSearch() {
     candidates = candidates.map(c => ({ pin: c.pin, miles: c.straight, estimated: false }));
   }
 
-  const within = candidates.filter(c => c.miles <= radius).sort((a, b) => a.miles - b.miles);
+  const within = candidates.filter(c => c.miles >= minMi && c.miles <= maxMi).sort((a, b) => a.miles - b.miles);
 
-  statusEl.textContent = within.length + ' found within ' + radius + ' mi' +
+  lastDistanceResults = within;
+  lastDistanceOrigin = origin;
+
+  const rangeLabel = minMi > 0 ? (minMi + '–' + (maxMi === Infinity ? 'any' : maxMi) + ' mi') : ((maxMi === Infinity ? 'any distance' : 'within ' + maxMi + ' mi'));
+  statusEl.textContent = within.length + ' found, ' + rangeLabel +
     (useDriving ? (usedDriving ? ' (driving distance)' : ' (straight-line — driving lookup unavailable, e.g. offline)') : ' (straight-line)');
 
   within.forEach(c => {
@@ -437,6 +541,8 @@ async function runDistanceSearch() {
     card.addEventListener('click', () => { closeDistanceTool(); openDetail(p.id); });
     resultsEl.appendChild(card);
   });
+
+  if (distanceViewMode === 'map') renderDistanceMap(within, origin);
 }
 
 // ---------- Add / Edit custom pin ----------
@@ -445,24 +551,22 @@ let addMarker = null;
 let addLatLng = null;
 let editingPinId = null;
 
-const ADD_SUBCATS = {
-  'Camping': CAMPING_SUBCATS,
-  'Sites / Hikes': SITESHIKES_SUBCATS,
-  'Food & Drink': FOODDRINK_SUBCATS,
-  'Adventures': null
-};
-
-function populateAddSubcatOptions(category) {
-  const row = document.getElementById('add-subcat-row');
-  const sel = document.getElementById('add-subcategory');
-  const subcats = ADD_SUBCATS[category];
+function populateSubcatOptions(category, rowId, selectId, includeAnyOption) {
+  const row = document.getElementById(rowId);
+  const sel = document.getElementById(selectId);
+  const subcats = CATEGORY_SUBCATS[category];
   if (!subcats) {
     row.classList.add('hidden');
     sel.innerHTML = '';
     return;
   }
   row.classList.remove('hidden');
-  sel.innerHTML = subcats.map(sc => '<option value="' + escapeHtml(sc) + '">' + escapeHtml(sc) + '</option>').join('');
+  const anyOpt = includeAnyOption ? '<option value="">Any type</option>' : '';
+  sel.innerHTML = anyOpt + subcats.map(sc => '<option value="' + escapeHtml(sc) + '">' + escapeHtml(sc) + '</option>').join('');
+}
+
+function populateAddSubcatOptions(category) {
+  populateSubcatOptions(category, 'add-subcat-row', 'add-subcategory', false);
 }
 
 function updateAddCampingChecksVisibility(category) {
@@ -575,7 +679,7 @@ function saveAddForm() {
   if (!addLatLng) { alert('Please set a location by clicking the map or searching an address.'); return; }
 
   const category = document.getElementById('add-category').value;
-  const subcats = ADD_SUBCATS[category];
+  const subcats = CATEGORY_SUBCATS[category];
   const subcategory = subcats ? document.getElementById('add-subcategory').value : null;
   const isCampground = category === 'Camping';
   const priceVal = document.getElementById('add-price').value;
@@ -681,7 +785,7 @@ function clearFilters() {
   filters.search = '';
   filters.categories.clear();
   filters.campingSubcats.clear();
-  filters.siteshikesSubcats.clear();
+  filters.thingsToDoSubcats.clear();
   filters.fooddrinkSubcats.clear();
   filters.starlink = false;
   filters.hatch = false;
@@ -696,7 +800,7 @@ function clearFilters() {
   filters.month = '';
 
   document.getElementById('search-box').value = '';
-  document.querySelectorAll('#category-filters input, #camping-subfilters input, #siteshikes-subfilters input, #fooddrink-subfilters input')
+  document.querySelectorAll('#category-filters input, #camping-subfilters input, #thingstodo-subfilters input, #fooddrink-subfilters input')
     .forEach(i => { i.checked = false; });
   document.getElementById('filter-starlink').checked = false;
   document.getElementById('filter-hatch').checked = false;
@@ -768,7 +872,7 @@ function importEditsFile(file) {
 function init() {
   buildCategoryFilters();
   buildSubcatFilters('camping-subfilters', CAMPING_SUBCATS, 'Camping', filters.campingSubcats);
-  buildSubcatFilters('siteshikes-subfilters', SITESHIKES_SUBCATS, 'Sites / Hikes', filters.siteshikesSubcats);
+  buildSubcatFilters('thingstodo-subfilters', THINGSTODO_SUBCATS, 'Things To Do', filters.thingsToDoSubcats);
   buildSubcatFilters('fooddrink-subfilters', FOODDRINK_SUBCATS, 'Food & Drink', filters.fooddrinkSubcats);
   buildStateFilter();
   initMap();
@@ -797,6 +901,11 @@ function init() {
   document.getElementById('distance-close').addEventListener('click', closeDistanceTool);
   document.getElementById('distance-overlay').addEventListener('click', e => { if (e.target.id === 'distance-overlay') closeDistanceTool(); });
   document.getElementById('distance-run-btn').addEventListener('click', runDistanceSearch);
+  document.getElementById('distance-category').addEventListener('change', e => {
+    populateSubcatOptions(e.target.value, 'distance-subcat-row', 'distance-subcategory', true);
+  });
+  document.getElementById('distance-view-list').addEventListener('click', () => setDistanceViewMode('list'));
+  document.getElementById('distance-view-map').addEventListener('click', () => setDistanceViewMode('map'));
 
   document.getElementById('export-btn').addEventListener('click', exportEdits);
   document.getElementById('import-btn').addEventListener('click', () => document.getElementById('import-file').click());

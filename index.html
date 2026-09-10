@@ -43,9 +43,9 @@
       <label class="checkbox-row"><input type="checkbox" id="filter-neartown"> Near Town (within 10mi)</label>
     </div>
 
-    <div class="sidebar-section" id="siteshikes-subfilter-section">
-      <h4>Sites / Hikes type</h4>
-      <div id="siteshikes-subfilters"></div>
+    <div class="sidebar-section" id="thingstodo-subfilter-section">
+      <h4>Things To Do type</h4>
+      <div id="thingstodo-subfilters"></div>
     </div>
 
     <div class="sidebar-section" id="fooddrink-subfilter-section">
@@ -144,13 +144,60 @@
         <option value="pleasanton">Pleasanton, CA (home)</option>
       </select>
     </label>
-    <label>Within
-      <input type="number" id="distance-radius" value="50" min="1"> miles
-    </label>
+
+    <div class="field-row">
+      <label>Drive distance (miles)</label>
+      <div class="price-row">
+        <input type="number" id="distance-min" placeholder="Min" min="0">
+        <input type="number" id="distance-max" placeholder="Max" min="0" value="50">
+      </div>
+    </div>
+
+    <div class="field-row">
+      <label>Category</label>
+      <select id="distance-category">
+        <option value="">All categories</option>
+        <option value="Camping">Camping</option>
+        <option value="Things To Do">Things To Do</option>
+        <option value="Food & Drink">Food &amp; Drink</option>
+      </select>
+    </div>
+
+    <div class="field-row hidden" id="distance-subcat-row">
+      <label>Type</label>
+      <select id="distance-subcategory"></select>
+    </div>
+
+    <div class="field-row">
+      <label>Best month</label>
+      <select id="distance-month">
+        <option value="">Any month</option>
+        <option value="Jan">January</option>
+        <option value="Feb">February</option>
+        <option value="Mar">March</option>
+        <option value="Apr">April</option>
+        <option value="May">May</option>
+        <option value="Jun">June</option>
+        <option value="Jul">July</option>
+        <option value="Aug">August</option>
+        <option value="Sep">September</option>
+        <option value="Oct">October</option>
+        <option value="Nov">November</option>
+        <option value="Dec">December</option>
+      </select>
+    </div>
+
     <label class="checkbox-row"><input type="checkbox" id="distance-use-driving" checked> Use driving distance when possible (falls back to straight-line if offline)</label>
     <button id="distance-run-btn" class="primary-btn">Search</button>
     <div id="distance-status"></div>
+
+    <div id="distance-view-toggle" class="panel-view-toggle">
+      <button id="distance-view-list" class="active" type="button">List</button>
+      <button id="distance-view-map" type="button">Map</button>
+    </div>
+
     <div id="distance-results"></div>
+    <div id="distance-map" class="hidden"></div>
   </div>
 </div>
 
@@ -166,9 +213,8 @@
       <label>Category</label>
       <select id="add-category">
         <option value="Camping">Camping</option>
-        <option value="Sites / Hikes">Sites / Hikes</option>
+        <option value="Things To Do">Things To Do</option>
         <option value="Food & Drink">Food &amp; Drink</option>
-        <option value="Adventures">Adventures</option>
       </select>
     </div>
 

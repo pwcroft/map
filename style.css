@@ -228,6 +228,49 @@ html, body {
   border: 1px solid var(--border);
 }
 #add-camping-checks { margin-bottom: 8px; }
+
+#distance-map {
+  height: 320px;
+  border-radius: 8px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+}
+.panel-view-toggle {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0;
+}
+.panel-view-toggle button {
+  flex: 1;
+  padding: 6px;
+  border: 1px solid var(--border);
+  background: var(--tan);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.panel-view-toggle button.active {
+  background: var(--green);
+  color: white;
+  border-color: var(--green);
+  font-weight: 600;
+}
+
+/* Category-colored, type-glyph map markers (replaces plain dots) */
+.pin-icon { background: transparent; border: none; }
+.pin-icon-inner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
 #detail-content h2 { margin-top: 0; }
 .field-row {
   margin-bottom: 12px;
