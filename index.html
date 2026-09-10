@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Camp Travel Map</title>
+<meta name="theme-color" content="#2f5233">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="app-header">
+  <button id="menu-toggle" aria-label="Toggle filters">&#9776;</button>
+  <h1>Camp Travel Map</h1>
+  <div id="header-actions">
+    <button id="view-toggle-map" class="view-btn active">Map</button>
+    <button id="view-toggle-list" class="view-btn">List</button>
+    <button id="distance-tool-btn" title="Find nearby">&#128205; Nearby</button>
+    <button id="add-pin-btn" title="Add a new campground or site">+ Add</button>
+  </div>
+</header>
+
+<div id="app-body">
+  <aside id="sidebar">
+    <div class="sidebar-section">
+      <input type="text" id="search-box" placeholder="Search by name...">
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Category</h3>
+      <div id="category-filters"></div>
+    </div>
+
+    <div class="sidebar-section" id="camping-subfilter-section">
+      <h4>Camping type</h4>
+      <div id="camping-subfilters"></div>
+      <label class="checkbox-row"><input type="checkbox" id="filter-starlink"> Starlink Friendly</label>
+      <label class="checkbox-row"><input type="checkbox" id="filter-hatch"> Good for Hatch</label>
+      <label class="checkbox-row"><input type="checkbox" id="filter-bookable"> Bookable only</label>
+      <label class="checkbox-row"><input type="checkbox" id="filter-neartown"> Near Town (within 10mi)</label>
+    </div>
+
+    <div class="sidebar-section" id="siteshikes-subfilter-section">
+      <h4>Sites / Hikes type</h4>
+      <div id="siteshikes-subfilters"></div>
+    </div>
+
+    <div class="sidebar-section" id="fooddrink-subfilter-section">
+      <h4>Food &amp; Drink type</h4>
+      <div id="fooddrink-subfilters"></div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Status</h3>
+      <select id="filter-visited">
+        <option value="all">All campgrounds</option>
+        <option value="visited">Visited only</option>
+        <option value="not-visited">Not visited only</option>
+      </select>
+      <select id="filter-done">
+        <option value="all">All sites/hikes/etc</option>
+        <option value="done">Done only</option>
+        <option value="not-done">Not done only</option>
+      </select>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>State</h3>
+      <select id="filter-state">
+        <option value="">All States</option>
+      </select>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Distance from Pleasanton</h3>
+      <label class="checkbox-row"><input type="checkbox" id="filter-400mi"> Within 400 driving miles</label>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Price (per night)</h3>
+      <div class="price-row">
+        <input type="number" id="price-min" placeholder="Min $" min="0">
+        <input type="number" id="price-max" placeholder="Max $" min="0">
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Best Month</h3>
+      <select id="filter-month">
+        <option value="">Any month</option>
+        <option value="Jan">January</option>
+        <option value="Feb">February</option>
+        <option value="Mar">March</option>
+        <option value="Apr">April</option>
+        <option value="May">May</option>
+        <option value="Jun">June</option>
+        <option value="Jul">July</option>
+        <option value="Aug">August</option>
+        <option value="Sep">September</option>
+        <option value="Oct">October</option>
+        <option value="Nov">November</option>
+        <option value="Dec">December</option>
+      </select>
+      <small class="hint">Uses month-level climate data where available, otherwise matches the season (Spring=Mar-May, Summer=Jun-Aug, Fall=Sep-Nov, Winter=Dec-Feb).</small>
+    </div>
+
+    <div class="sidebar-section">
+      <button id="clear-filters-btn" class="secondary-btn">Clear all filters</button>
+      <div id="result-count"></div>
+    </div>
+
+    <div class="sidebar-section footer-section">
+      <button id="export-btn" class="secondary-btn">Export my edits</button>
+      <button id="import-btn" class="secondary-btn">Import edits</button>
+      <input type="file" id="import-file" accept=".json" style="display:none">
+      <small class="hint">Your edits and any pins you add are saved in this browser. Export regularly to back them up or move them to another device.</small>
+    </div>
+  </aside>
+
+  <main id="main-view">
+    <div id="map"></div>
+    <div id="list-view" class="hidden"></div>
+  </main>
+</div>
+
+<!-- Detail / Edit panel -->
+<div id="detail-overlay" class="hidden">
+  <div id="detail-panel">
+    <button id="detail-close" aria-label="Close">&times;</button>
+    <div id="detail-content"></div>
+  </div>
+</div>
+
+<!-- Distance tool panel -->
+<div id="distance-overlay" class="hidden">
+  <div id="distance-panel">
+    <button id="distance-close" aria-label="Close">&times;</button>
+    <h2>Find nearby</h2>
+    <label>From
+      <select id="distance-origin">
+        <option value="pleasanton">Pleasanton, CA (home)</option>
+      </select>
+    </label>
+    <label>Within
+      <input type="number" id="distance-radius" value="50" min="1"> miles
+    </label>
+    <label class="checkbox-row"><input type="checkbox" id="distance-use-driving" checked> Use driving distance when possible (falls back to straight-line if offline)</label>
+    <button id="distance-run-btn" class="primary-btn">Search</button>
+    <div id="distance-status"></div>
+    <div id="distance-results"></div>
+  </div>
+</div>
+
+<!-- Add / Edit custom pin panel -->
+<div id="add-overlay" class="hidden">
+  <div id="add-panel">
+    <button id="add-close" aria-label="Close">&times;</button>
+    <h2 id="add-form-title">Add a new pin</h2>
+
+    <div class="field-row"><label>Name</label><input type="text" id="add-name" placeholder="e.g. Lakeside RV Park"></div>
+
+    <div class="field-row">
+      <label>Category</label>
+      <select id="add-category">
+        <option value="Camping">Camping</option>
+        <option value="Sites / Hikes">Sites / Hikes</option>
+        <option value="Food & Drink">Food &amp; Drink</option>
+        <option value="Adventures">Adventures</option>
+      </select>
+    </div>
+
+    <div class="field-row" id="add-subcat-row">
+      <label>Sub-category</label>
+      <select id="add-subcategory"></select>
+    </div>
+
+    <div id="add-camping-checks">
+      <label class="checkbox-row"><input type="checkbox" id="add-starlink"> Starlink Friendly</label>
+      <label class="checkbox-row"><input type="checkbox" id="add-hatch"> Good for Hatch</label>
+      <label class="checkbox-row"><input type="checkbox" id="add-bookable"> Bookable</label>
+    </div>
+
+    <div class="field-row"><label>State</label><input type="text" id="add-state" placeholder="e.g. California"></div>
+    <div class="field-row"><label>Price per night ($)</label><input type="number" id="add-price" min="0"></div>
+    <div class="field-row"><label>Hookups</label><input type="text" id="add-hookups" placeholder="e.g. FHU, W&E, Dry"></div>
+    <div class="field-row"><label>Website / booking URL</label><input type="text" id="add-url"></div>
+    <div class="field-row"><label>Notes</label><textarea id="add-notes"></textarea></div>
+
+    <div class="field-row">
+      <label>Location</label>
+      <div id="add-location-status" class="field-static">Not set yet — click the map below, or search an address.</div>
+      <div class="price-row">
+        <input type="text" id="add-address" placeholder="Search an address or place name...">
+        <button id="add-geocode-btn" class="secondary-btn" style="width:auto;">Find</button>
+      </div>
+      <div id="add-map"></div>
+    </div>
+
+    <button id="add-save-btn" class="primary-btn">Save pin</button>
+    <button id="add-delete-btn" class="secondary-btn hidden" style="color:#b5493b;">Delete this pin</button>
+  </div>
+</div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
