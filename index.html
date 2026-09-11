@@ -89,22 +89,8 @@
     </div>
 
     <div class="sidebar-section">
-      <h3>Best Month</h3>
-      <select id="filter-month">
-        <option value="">Any month</option>
-        <option value="Jan">January</option>
-        <option value="Feb">February</option>
-        <option value="Mar">March</option>
-        <option value="Apr">April</option>
-        <option value="May">May</option>
-        <option value="Jun">June</option>
-        <option value="Jul">July</option>
-        <option value="Aug">August</option>
-        <option value="Sep">September</option>
-        <option value="Oct">October</option>
-        <option value="Nov">November</option>
-        <option value="Dec">December</option>
-      </select>
+      <h3>Best Month <span style="font-weight:normal;text-transform:none;letter-spacing:normal;color:var(--brown);font-size:11px;">(pick any number)</span></h3>
+      <div id="month-filters"></div>
       <small class="hint">Uses month-by-month climate data (curated regions, or a live weather check for everywhere else) — no more matching a whole season.</small>
       <small class="hint" id="climate-prefetch-status" style="display:none;"></small>
     </div>

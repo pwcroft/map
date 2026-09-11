@@ -286,7 +286,7 @@ const filters = {
   within400: false,
   priceMin: null,
   priceMax: null,
-  month: ''
+  months: new Set()
 };
 
 function bestMonthsState(p) {
@@ -333,9 +333,9 @@ function passesFilters(pin) {
   if (filters.priceMin != null && !(p.price_usd != null && p.price_usd >= filters.priceMin)) return false;
   if (filters.priceMax != null && !(p.price_usd != null && p.price_usd <= filters.priceMax)) return false;
 
-  if (filters.month) {
+  if (filters.months.size) {
     const months = getBestMonths(p);
-    if (!months || !months.includes(filters.month)) return false;
+    if (!months || !months.some(m => filters.months.has(m))) return false;
   }
 
   return true;
@@ -1389,6 +1389,23 @@ function buildSubcatFilters(containerId, subcats, categoryName, targetSet) {
   });
 }
 
+function buildMonthFilters() {
+  const container = document.getElementById('month-filters');
+  MONTH_ABBR.forEach(m => {
+    const label = document.createElement('label');
+    label.className = 'checkbox-row';
+    label.style.display = 'inline-flex';
+    label.style.width = '31%';
+    label.style.boxSizing = 'border-box';
+    label.innerHTML = '<input type="checkbox"> ' + m;
+    label.querySelector('input').addEventListener('change', e => {
+      if (e.target.checked) filters.months.add(m); else filters.months.delete(m);
+      applyFilters();
+    });
+    container.appendChild(label);
+  });
+}
+
 function buildStateFilter() {
   const sel = document.getElementById('filter-state');
   const states = Array.from(new Set(allPins().map(p => p.state).filter(Boolean))).sort();
@@ -1429,10 +1446,10 @@ function clearFilters() {
   filters.within400 = false;
   filters.priceMin = null;
   filters.priceMax = null;
-  filters.month = '';
+  filters.months.clear();
 
   document.getElementById('search-box').value = '';
-  document.querySelectorAll('#category-filters input, #camping-subfilters input, #thingstodo-subfilters input, #fooddrink-subfilters input')
+  document.querySelectorAll('#category-filters input, #camping-subfilters input, #thingstodo-subfilters input, #fooddrink-subfilters input, #month-filters input')
     .forEach(i => { i.checked = false; });
   document.getElementById('filter-starlink').checked = false;
   document.getElementById('filter-hatch').checked = false;
@@ -1444,7 +1461,6 @@ function clearFilters() {
   document.getElementById('filter-400mi').checked = false;
   document.getElementById('price-min').value = '';
   document.getElementById('price-max').value = '';
-  document.getElementById('filter-month').value = '';
 
   applyFilters();
 }
@@ -1521,6 +1537,7 @@ function init() {
   buildSubcatFilters('thingstodo-subfilters', THINGSTODO_SUBCATS, 'Things To Do', filters.thingsToDoSubcats);
   buildSubcatFilters('fooddrink-subfilters', FOODDRINK_SUBCATS, 'Food & Drink', filters.fooddrinkSubcats);
   buildStateFilter();
+  buildMonthFilters();
   initMap();
 
   document.getElementById('search-box').addEventListener('input', e => { filters.search = e.target.value.toLowerCase(); applyFilters(); });
@@ -1533,7 +1550,6 @@ function init() {
   document.getElementById('filter-400mi').addEventListener('change', e => { filters.within400 = e.target.checked; applyFilters(); });
   document.getElementById('price-min').addEventListener('input', e => { filters.priceMin = e.target.value === '' ? null : parseFloat(e.target.value); applyFilters(); });
   document.getElementById('price-max').addEventListener('input', e => { filters.priceMax = e.target.value === '' ? null : parseFloat(e.target.value); applyFilters(); });
-  document.getElementById('filter-month').addEventListener('change', e => { filters.month = e.target.value; applyFilters(); });
   document.getElementById('clear-filters-btn').addEventListener('click', clearFilters);
 
   document.getElementById('view-toggle-map').addEventListener('click', () => setView('map'));
