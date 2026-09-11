@@ -332,29 +332,72 @@ function buildDetailHtml(p) {
 
   rows.push('<h2>' + escapeHtml(p.name) + '</h2>');
   rows.push('<div class="detail-badges">' + badgesHtml(p) + '</div>');
+
+  const townsOverride = p.nearby_towns_override || '';
+  const cachedTowns = NEARBY_TOWNS_CACHE[p.id] && NEARBY_TOWNS_CACHE[p.id].towns;
+  const townsDisplay = townsOverride ? escapeHtml(townsOverride) :
+    (cachedTowns ? nearbyTownsHtml(cachedTowns, p) : (p.nearest_town_name ? escapeHtml(p.nearest_town_name) + ' (' + p.nearest_town_miles + ' mi) — checking for more nearby…' : 'Checking nearby towns &amp; cities…'));
+  const maxNightsText = [p.max_nights_stay ? p.max_nights_stay + ' nights per stay' : null, p.max_nights_year ? p.max_nights_year + ' nights per year' : null].filter(Boolean).join(' / ');
+
+  // ---- Read-only view (default) — everything here is locked until "Edit" is clicked ----
+  rows.push('<div id="detail-view">');
   rows.push('<div class="field-row"><label>Category</label><div class="field-static">' + escapeHtml(p.category + (p.subcategory ? ' · ' + p.subcategory : '')) + '</div></div>');
   rows.push('<div class="field-row"><label>State</label><div class="field-static">' + escapeHtml(p.state || '—') + '</div></div>');
   if (p.area) rows.push('<div class="field-row"><label>Area</label><div class="field-static">' + escapeHtml(p.area) + '</div></div>');
   rows.push('<div class="field-row"><label>Distance from Pleasanton</label><div class="field-static">' +
     (p.driving_miles_from_pleasanton != null
-      ? Math.round(p.driving_miles_from_pleasanton) + ' mi (~' + Math.round(p.driving_minutes_from_pleasanton / 6) / 10 + ' hr drive)'
+      ? Math.round(p.driving_miles_from_pleasanton) + ' mi' + (p.driving_minutes_from_pleasanton != null ? ' (~' + Math.round(p.driving_minutes_from_pleasanton / 6) / 10 + ' hr drive)' : '')
       : 'Not computed (likely over 400mi)') + '</div></div>');
   if (bestMonths.length) rows.push('<div class="field-row"><label>Best months</label><div class="field-static">' + bestMonths.join(', ') + '</div></div>');
-  if (p.category === 'Camping') {
-    const cachedTowns = NEARBY_TOWNS_CACHE[p.id] && NEARBY_TOWNS_CACHE[p.id].towns;
-    rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><div id="nearby-towns-box" class="field-static">' +
-      (cachedTowns ? nearbyTownsHtml(cachedTowns, p) : (p.nearest_town_name ? escapeHtml(p.nearest_town_name) + ' (' + p.nearest_town_miles + ' mi) — checking for more nearby…' : 'Checking nearby towns &amp; cities…')) +
-      '</div></div>');
-  }
+  if (p.category === 'Camping') rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><div id="nearby-towns-box" class="field-static">' + townsDisplay + '</div></div>');
   if (p.park_type) rows.push('<div class="field-row"><label>Park type</label><div class="field-static">' + escapeHtml(p.park_type) + '</div></div>');
   if (p.reservation_timing) rows.push('<div class="field-row"><label>Reservation timing</label><div class="field-static">' + escapeHtml(p.reservation_timing) + '</div></div>');
-  if (p.max_nights_stay || p.max_nights_year) {
-    const bits = [];
-    if (p.max_nights_stay) bits.push(p.max_nights_stay + ' nights per stay');
-    if (p.max_nights_year) bits.push(p.max_nights_year + ' nights per year');
-    rows.push('<div class="field-row"><label>Max nights</label><div class="field-static">' + escapeHtml(bits.join(' / ')) + '</div></div>');
-  }
+  if (maxNightsText) rows.push('<div class="field-row"><label>Max nights</label><div class="field-static">' + escapeHtml(maxNightsText) + '</div></div>');
+  rows.push('<div class="field-row"><label>' + (p.is_campground ? 'Visited' : 'Done') + '</label><div class="field-static">' + ((p.is_campground ? p.visited : p.done) ? 'Yes' : 'No') + '</div></div>');
+  rows.push('<div class="field-row"><label>Price per night</label><div class="field-static">' + (p.price_usd != null ? '$' + p.price_usd : '—') + '</div></div>');
+  rows.push('<div class="field-row"><label>Hookups</label><div class="field-static">' + (escapeHtml((p.hookup_types || []).join(', ')) || '—') + '</div></div>');
+  rows.push('<div class="field-row"><label>Website / booking URL</label><div class="field-static">' + (p.url ? '<a href="' + escapeHtml(p.url) + '" target="_blank" rel="noopener">' + escapeHtml(p.url) + '</a>' : '—') + '</div></div>');
+  rows.push('<div class="field-row"><label>Notes / best sites</label><div class="field-static" style="white-space:pre-wrap;">' + (p.notes ? escapeHtml(p.notes) : '—') + '</div></div>');
+  rows.push('<button id="detail-edit-toggle-btn" class="primary-btn" type="button">&#9998; Edit</button>');
+  rows.push('</div>');
 
+  // ---- Edit form (hidden until "Edit" is clicked) ----
+  const seasonChecks = ['Spring', 'Summer', 'Fall', 'Winter'].map(s =>
+    '<label class="checkbox-row"><input type="checkbox" id="edit-season-' + s.toLowerCase() + '" ' + ((p.best_seasons || []).includes(s) ? 'checked' : '') + '> ' + s + '</label>'
+  ).join('');
+
+  rows.push('<div id="detail-edit-form" class="hidden">');
+  rows.push('<div class="field-row"><label>Category</label><select id="edit-category">' +
+    CATEGORY_ORDER.map(c => '<option value="' + escapeHtml(c) + '"' + (c === p.category ? ' selected' : '') + '>' + escapeHtml(c) + '</option>').join('') +
+    '</select></div>');
+  rows.push('<div class="field-row" id="edit-subcat-row"><label>Type</label><select id="edit-subcategory"></select></div>');
+  rows.push('<div class="field-row"><label>State</label><input type="text" id="edit-state" value="' + escapeHtml(p.state || '') + '"></div>');
+  rows.push('<div class="field-row"><label>Area</label><input type="text" id="edit-area" value="' + escapeHtml(p.area || '') + '" placeholder="e.g. Big Sur Coast"></div>');
+  rows.push('<div class="field-row"><label>Distance from Pleasanton (driving miles)</label><input type="number" id="edit-distance-miles" min="0" value="' + (p.driving_miles_from_pleasanton != null ? p.driving_miles_from_pleasanton : '') + '"></div>');
+  rows.push('<div class="field-row"><label>Best months (by season)</label>' + seasonChecks + '</div>');
+  if (p.category === 'Camping') rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><input type="text" id="edit-towns-override" value="' + escapeHtml(townsOverride) + '" placeholder="Leave blank to auto-detect, or type your own list"></div>');
+  rows.push('<div class="field-row"><label>Park type</label><input type="text" id="edit-park-type" value="' + escapeHtml(p.park_type || '') + '"></div>');
+  rows.push('<div class="field-row"><label>Reservation timing</label><input type="text" id="edit-reservation-timing" value="' + escapeHtml(p.reservation_timing || '') + '" placeholder="e.g. 6 months in advance, first-come first-served"></div>');
+  rows.push('<div class="field-row"><label>Max nights</label><div class="price-row">' +
+    '<input type="number" id="edit-max-nights-stay" min="0" placeholder="per stay" value="' + (p.max_nights_stay != null ? p.max_nights_stay : '') + '">' +
+    '<input type="number" id="edit-max-nights-year" min="0" placeholder="per year" value="' + (p.max_nights_year != null ? p.max_nights_year : '') + '">' +
+    '</div></div>');
+  rows.push('<div class="toggle-row"><span>' + (p.is_campground ? 'Visited' : 'Done') + '</span>' +
+    '<input type="checkbox" id="detail-status-toggle" ' + ((p.is_campground ? p.visited : p.done) ? 'checked' : '') + '></div>');
+  rows.push('<div class="field-row"><label>Price per night ($)</label><input type="number" id="detail-price" min="0" value="' + (p.price_usd != null ? p.price_usd : '') + '"></div>');
+  rows.push('<div class="field-row"><label>Hookups</label><input type="text" id="detail-hookups" value="' + escapeHtml((p.hookup_types || []).join(', ')) + '" placeholder="e.g. FHU, W&E, Dry"></div>');
+  rows.push('<div class="field-row"><label>Website / booking URL</label><input type="text" id="detail-url" value="' + escapeHtml(p.url || '') + '"></div>');
+  rows.push('<div id="detail-tag-checks">' +
+    '<label class="checkbox-row"><input type="checkbox" id="detail-starlink" ' + (p.starlink_friendly ? 'checked' : '') + '> Starlink Friendly</label>' +
+    '<label class="checkbox-row"><input type="checkbox" id="detail-hatch" ' + (p.good_for_hatch ? 'checked' : '') + '> Good for Hatch</label>' +
+    '<label class="checkbox-row"><input type="checkbox" id="detail-bookable" ' + (p.bookable ? 'checked' : '') + '> Bookable</label>' +
+    '</div>');
+  rows.push('<div class="field-row"><label>Notes / best sites</label><textarea id="detail-notes">' + escapeHtml(p.notes || '') + '</textarea></div>');
+  rows.push('<button id="detail-save-btn" class="primary-btn" type="button">Save changes</button>');
+  rows.push('<button id="detail-cancel-btn" class="secondary-btn" type="button">Cancel</button>');
+  rows.push('</div>');
+
+  // ---- Always available, regardless of edit mode: hikes (has its own add/remove controls) ----
   {
     const hikes = (p.nearby_alltrails_hikes || []).slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
     const hikeRows = hikes.map((h, i) =>
@@ -389,21 +432,6 @@ function buildDetailHtml(p) {
     '</div>');
   }
 
-  rows.push('<div class="toggle-row"><span>' + (p.is_campground ? 'Visited' : 'Done') + '</span>' +
-    '<input type="checkbox" id="detail-status-toggle" ' + ((p.is_campground ? p.visited : p.done) ? 'checked' : '') + '></div>');
-
-  rows.push('<div class="field-row"><label>Price per night ($)</label><input type="number" id="detail-price" min="0" value="' + (p.price_usd != null ? p.price_usd : '') + '"></div>');
-  rows.push('<div class="field-row"><label>Hookups</label><input type="text" id="detail-hookups" value="' + escapeHtml((p.hookup_types || []).join(', ')) + '" placeholder="e.g. FHU, W&E, Dry"></div>');
-  rows.push('<div class="field-row"><label>Website / booking URL</label><input type="text" id="detail-url" value="' + escapeHtml(p.url || '') + '"></div>');
-  rows.push('<div class="field-row"><label>Reservation / booking timing</label><input type="text" id="detail-reservation-timing" value="' + escapeHtml(p.reservation_timing || '') + '" placeholder="e.g. 6 months in advance, first-come first-served"></div>');
-  rows.push('<div id="detail-tag-checks">' +
-    '<label class="checkbox-row"><input type="checkbox" id="detail-starlink" ' + (p.starlink_friendly ? 'checked' : '') + '> Starlink Friendly</label>' +
-    '<label class="checkbox-row"><input type="checkbox" id="detail-hatch" ' + (p.good_for_hatch ? 'checked' : '') + '> Good for Hatch</label>' +
-    '<label class="checkbox-row"><input type="checkbox" id="detail-bookable" ' + (p.bookable ? 'checked' : '') + '> Bookable</label>' +
-  '</div>');
-  rows.push('<div class="field-row"><label>Notes / best sites</label><textarea id="detail-notes">' + escapeHtml(p.notes || '') + '</textarea></div>');
-
-  rows.push('<button id="detail-save-btn" class="primary-btn">Save changes</button>');
   rows.push('<button id="detail-nearby-btn" class="secondary-btn">Find campgrounds/sites near this pin</button>');
   rows.push('<button id="detail-addtrip-btn" class="secondary-btn">Add to a trip</button>');
   if (p.is_custom) {
@@ -415,25 +443,69 @@ function buildDetailHtml(p) {
 }
 
 function wireDetailEvents(p) {
+  // Read-only view <-> edit form toggle. Everything data-related lives behind this —
+  // hikes (own add/remove controls) and the action buttons below are always available.
+  const editToggleBtn = document.getElementById('detail-edit-toggle-btn');
+  if (editToggleBtn) {
+    editToggleBtn.onclick = () => {
+      document.getElementById('detail-view').classList.add('hidden');
+      document.getElementById('detail-edit-form').classList.remove('hidden');
+    };
+  }
+  const cancelBtn = document.getElementById('detail-cancel-btn');
+  if (cancelBtn) {
+    cancelBtn.onclick = () => { openDetail(p.id); };
+  }
+  populateSubcatOptions(p.category, 'edit-subcat-row', 'edit-subcategory', false);
+  const editSubcatSel = document.getElementById('edit-subcategory');
+  if (editSubcatSel && p.subcategory) editSubcatSel.value = p.subcategory;
+  const editCategorySel = document.getElementById('edit-category');
+  if (editCategorySel) {
+    editCategorySel.addEventListener('change', e => {
+      populateSubcatOptions(e.target.value, 'edit-subcat-row', 'edit-subcategory', false);
+    });
+  }
+
   document.getElementById('detail-save-btn').onclick = () => {
     const fields = {};
+    const newCategory = document.getElementById('edit-category').value;
+    fields.category = newCategory;
+    fields.is_campground = (newCategory === 'Camping');
+    const subcatSel = document.getElementById('edit-subcategory');
+    fields.subcategory = (subcatSel && subcatSel.value) ? subcatSel.value : null;
+    fields.state = document.getElementById('edit-state').value.trim() || null;
+    fields.area = document.getElementById('edit-area').value.trim() || null;
+    const distVal = document.getElementById('edit-distance-miles').value;
+    fields.driving_miles_from_pleasanton = distVal === '' ? null : parseFloat(distVal);
+    fields.driving_minutes_from_pleasanton = null; // unknown after a manual mileage edit
+    const seasons = [];
+    ['spring', 'summer', 'fall', 'winter'].forEach(s => {
+      const cb = document.getElementById('edit-season-' + s);
+      if (cb && cb.checked) seasons.push(s.charAt(0).toUpperCase() + s.slice(1));
+    });
+    fields.best_seasons = seasons.length ? seasons : null;
+    const townsOverrideInput = document.getElementById('edit-towns-override');
+    if (townsOverrideInput) fields.nearby_towns_override = townsOverrideInput.value.trim() || null;
+    fields.park_type = document.getElementById('edit-park-type').value.trim() || null;
+    fields.reservation_timing = document.getElementById('edit-reservation-timing').value.trim() || null;
+    const maxStayVal = document.getElementById('edit-max-nights-stay').value;
+    fields.max_nights_stay = maxStayVal === '' ? null : parseFloat(maxStayVal);
+    const maxYearVal = document.getElementById('edit-max-nights-year').value;
+    fields.max_nights_year = maxYearVal === '' ? null : parseFloat(maxYearVal);
     const priceVal = document.getElementById('detail-price').value;
     fields.price_usd = priceVal === '' ? null : parseFloat(priceVal);
     const hookupsRaw = document.getElementById('detail-hookups').value;
     fields.hookup_types = hookupsRaw.split(',').map(s => s.trim()).filter(Boolean);
     const urlVal = document.getElementById('detail-url').value.trim();
     fields.url = urlVal || null;
-    const reservationVal = document.getElementById('detail-reservation-timing').value.trim();
-    fields.reservation_timing = reservationVal || null;
     fields.starlink_friendly = document.getElementById('detail-starlink').checked;
     fields.good_for_hatch = document.getElementById('detail-hatch').checked;
     fields.bookable = document.getElementById('detail-bookable').checked;
     fields.notes = document.getElementById('detail-notes').value;
     const statusChecked = document.getElementById('detail-status-toggle').checked;
-    if (p.is_campground) fields.visited = statusChecked; else fields.done = statusChecked;
+    if (fields.is_campground) fields.visited = statusChecked; else fields.done = statusChecked;
     updatePinEdit(p.id, fields);
-    closeDetail();
-    applyFilters();
+    location.reload();
   };
   document.getElementById('detail-nearby-btn').onclick = () => {
     closeDetail();
@@ -504,7 +576,7 @@ function openDetail(id) {
   document.getElementById('detail-overlay').classList.remove('hidden');
   wireDetailEvents(p);
 
-  if (p.category === 'Camping' && p.lat != null && p.lng != null) {
+  if (p.category === 'Camping' && p.lat != null && p.lng != null && !p.nearby_towns_override) {
     fetchNearbyTowns(p.id, p.lat, p.lng).then(towns => {
       const box = document.getElementById('nearby-towns-box');
       if (box) box.innerHTML = nearbyTownsHtml(towns, p);
