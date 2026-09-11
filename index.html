@@ -219,13 +219,27 @@
 
       <div id="trip-picker-add-row" class="hidden" style="margin:10px 0;"></div>
 
-      <div id="trip-stops-list"></div>
-
-      <div class="field-row" style="margin-top:10px;">
-        <label>Add a stop</label>
-        <input type="text" id="trip-stop-search" placeholder="Search campgrounds / activities by name...">
-        <div id="trip-stop-search-results"></div>
+      <div id="trip-view-toggle" class="panel-view-toggle">
+        <button id="trip-view-list" class="active" type="button">List</button>
+        <button id="trip-view-map" type="button">Map</button>
       </div>
+
+      <div id="trip-list-mode">
+        <h3 class="trip-section-heading">Campgrounds</h3>
+        <div id="trip-stops-list"></div>
+
+        <h3 class="trip-section-heading">Sites &amp; Activities</h3>
+        <small class="hint">Tie each one to a campground you're staying at, or to the drive day between two consecutive campgrounds — its distance is shown from whichever it's tied to.</small>
+        <div id="trip-sites-list"></div>
+
+        <div class="field-row" style="margin-top:10px;">
+          <label>Add a stop (campground, site, or activity)</label>
+          <input type="text" id="trip-stop-search" placeholder="Search by name...">
+          <div id="trip-stop-search-results"></div>
+        </div>
+      </div>
+
+      <div id="trip-map" class="hidden"></div>
 
       <button id="trip-delete-btn" class="secondary-btn" type="button" style="color:#b5493b;margin-top:16px;">Delete this trip</button>
     </div>

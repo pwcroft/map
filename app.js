@@ -917,9 +917,42 @@ function saveTrips(trips) {
 }
 let TRIPS = loadTrips();
 
+// One-time migration: older trips stored every stop (campgrounds AND sites/activities) in one
+// combined ordered `stops` list. Sites now live in their own `sites` list, each tied to a
+// specific campground stop or to the "drive day" between two consecutive campground stops —
+// this splits any trip saved before that change, moving non-Camping stops into `sites`
+// (unassigned) and giving every stop a stable id so associations survive reordering.
+function migrateTripsIfNeeded() {
+  let changed = false;
+  TRIPS.forEach(trip => {
+    (trip.options || []).forEach(option => {
+      option.stops.forEach(s => { if (!s.id) { s.id = genId('stop'); changed = true; } });
+      if (!option.sites) {
+        const sites = [];
+        const keptStops = [];
+        option.stops.forEach(s => {
+          const pin = getPin(s.pinId);
+          const isCamp = pin && effectivePin(pin).category === 'Camping';
+          if (isCamp || !pin) keptStops.push(s);
+          else sites.push({ id: genId('site'), pinId: s.pinId, date: s.date, notes: s.notes || '', assoc: null });
+        });
+        option.stops = keptStops;
+        option.sites = sites;
+        changed = true;
+      }
+    });
+  });
+  if (changed) saveTrips(TRIPS);
+}
+migrateTripsIfNeeded();
+
 let activeTripId = null;
 let activeOptionId = null;
 let tripPickerPinId = null;
+let tripViewMode = 'list';
+let tripMap = null;
+let tripMarkersLayer = null;
+let tripLineLayer = null;
 const legCache = {}; // "idA|idB" -> {miles, minutes, estimated}
 
 function genId(prefix) { return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7); }
@@ -955,7 +988,7 @@ function renderTripsListView() {
     list.innerHTML = '<div class="field-static" style="margin-bottom:8px;">No trips yet — create one below.</div>';
   }
   TRIPS.forEach(trip => {
-    const stopCount = trip.options.reduce((sum, o) => sum + o.stops.length, 0);
+    const stopCount = trip.options.reduce((sum, o) => sum + o.stops.length + (o.sites || []).length, 0);
     const card = document.createElement('div');
     card.className = 'list-card';
     card.innerHTML = '<div class="list-card-main"><div class="list-card-name">' + escapeHtml(trip.name) + '</div>' +
@@ -970,7 +1003,7 @@ function createTrip() {
   const nameInput = document.getElementById('new-trip-name');
   const name = nameInput.value.trim();
   if (!name) { alert('Please enter a trip name.'); return; }
-  const trip = { id: genId('trip'), name: name, options: [{ id: genId('opt'), name: 'Option 1', stops: [] }] };
+  const trip = { id: genId('trip'), name: name, options: [{ id: genId('opt'), name: 'Option 1', stops: [], sites: [] }] };
   TRIPS.push(trip);
   saveTrips(TRIPS);
   openTripDetail(trip.id);
@@ -983,6 +1016,7 @@ function openTripDetail(tripId) {
   activeOptionId = trip.options[0].id;
   document.getElementById('trips-list-view').classList.add('hidden');
   document.getElementById('trip-detail-view').classList.remove('hidden');
+  setTripViewMode('list');
   renderTripDetail();
 }
 
@@ -1029,21 +1063,31 @@ function renderTripDetail() {
     pickerRow.innerHTML = '';
   }
 
-  renderTripStops(option);
+  renderTripCampgrounds(option);
+  renderTripSites(option);
   document.getElementById('trip-stop-search').value = '';
   document.getElementById('trip-stop-search-results').innerHTML = '';
+
+  if (tripViewMode === 'map') renderTripMap(option);
 }
 
 function addStopToOption(option, pinId, date) {
-  option.stops.push({ pinId: pinId, date: date || null, notes: '' });
+  const pin = getPin(pinId);
+  const isCamp = pin && effectivePin(pin).category === 'Camping';
+  if (!option.sites) option.sites = [];
+  if (isCamp) {
+    option.stops.push({ id: genId('stop'), pinId: pinId, date: date || null, notes: '' });
+  } else {
+    option.sites.push({ id: genId('site'), pinId: pinId, date: date || null, notes: '', assoc: null });
+  }
   saveTrips(TRIPS);
 }
 
-function renderTripStops(option) {
+function renderTripCampgrounds(option) {
   const container = document.getElementById('trip-stops-list');
   container.innerHTML = '';
   if (!option.stops.length) {
-    container.innerHTML = '<div class="field-static">No stops yet — search below to add one.</div>';
+    container.innerHTML = '<div class="field-static">No campgrounds yet — search below to add one.</div>';
     return;
   }
   option.stops.forEach((stop, i) => {
@@ -1084,9 +1128,9 @@ function renderTripStops(option) {
       container.appendChild(legEl);
       if (p && nextPin && p.lat != null && p.lng != null) {
         const nextP = effectivePin(nextPin);
-        legEl.textContent = 'Calculating drive...';
+        legEl.textContent = 'Calculating drive day...';
         computeLegDistance(p, nextP).then(leg => {
-          legEl.textContent = '↓ ' + Math.round(leg.miles) + ' mi' +
+          legEl.textContent = '↓ Drive day: ' + Math.round(leg.miles) + ' mi' +
             (leg.minutes != null ? ' (~' + Math.round(leg.minutes / 6) / 10 + ' hr)' : '') +
             (leg.estimated ? ' — straight-line est.' : ' drive');
         });
@@ -1102,13 +1146,214 @@ function moveStop(option, index, dir) {
   option.stops[index] = option.stops[newIndex];
   option.stops[newIndex] = tmp;
   saveTrips(TRIPS);
-  renderTripStops(option);
+  renderTripDetail();
 }
 
 function removeStop(option, index) {
+  const removed = option.stops[index];
   option.stops.splice(index, 1);
+  (option.sites || []).forEach(site => {
+    if (!site.assoc) return;
+    if (site.assoc.type === 'campground' && site.assoc.stopId === removed.id) site.assoc = null;
+    if (site.assoc.type === 'driveday' && (site.assoc.fromStopId === removed.id || site.assoc.toStopId === removed.id)) site.assoc = null;
+  });
   saveTrips(TRIPS);
-  renderTripStops(option);
+  renderTripDetail();
+}
+
+// ---- Sites & Activities: each is tied to one campground stop, or to the "drive day"
+// between two consecutive campground stops, and shows its distance from whichever it's tied to.
+function renderTripSites(option) {
+  const container = document.getElementById('trip-sites-list');
+  container.innerHTML = '';
+  const sites = option.sites || [];
+  if (!sites.length) {
+    container.innerHTML = '<div class="field-static">No sites or activities added yet — search below to add one.</div>';
+    return;
+  }
+
+  const campOptions = option.stops.map(s => {
+    const pin = getPin(s.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    return { stopId: s.id, label: (p ? p.name : '(removed pin)') + (s.date ? ' (' + s.date + ')' : '') };
+  });
+  const driveDayOptions = [];
+  for (let i = 0; i < option.stops.length - 1; i++) {
+    const a = option.stops[i], b = option.stops[i + 1];
+    const pa = getPin(a.pinId), pb = getPin(b.pinId);
+    driveDayOptions.push({
+      fromStopId: a.id,
+      toStopId: b.id,
+      label: 'Drive day: ' + (pa ? effectivePin(pa).name : '(removed pin)') + ' → ' + (pb ? effectivePin(pb).name : '(removed pin)')
+    });
+  }
+
+  sites.forEach((site, i) => {
+    const pin = getPin(site.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    const card = document.createElement('div');
+    card.className = 'list-card';
+    card.style.cursor = 'default';
+    card.style.flexDirection = 'column';
+    card.style.alignItems = 'stretch';
+
+    const selectOptions = ['<option value="">Not yet assigned</option>']
+      .concat(campOptions.map(o => '<option value="camp:' + o.stopId + '"' +
+        (site.assoc && site.assoc.type === 'campground' && site.assoc.stopId === o.stopId ? ' selected' : '') +
+        '>At: ' + escapeHtml(o.label) + '</option>'))
+      .concat(driveDayOptions.map(o => '<option value="drive:' + o.fromStopId + ':' + o.toStopId + '"' +
+        (site.assoc && site.assoc.type === 'driveday' && site.assoc.fromStopId === o.fromStopId && site.assoc.toStopId === o.toStopId ? ' selected' : '') +
+        '>' + escapeHtml(o.label) + '</option>'))
+      .join('');
+
+    card.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;">' +
+        '<div class="list-card-main">' +
+          '<div class="list-card-name">' + escapeHtml(p ? p.name : '(pin no longer available)') + '</div>' +
+          '<div class="list-card-meta">' + (p ? escapeHtml(p.category + (p.subcategory ? ' · ' + p.subcategory : '')) : '') + '</div>' +
+        '</div>' +
+        '<button data-act="remove" type="button" title="Remove" style="color:#b5493b;flex-shrink:0;background:none;border:none;font-size:18px;cursor:pointer;">&times;</button>' +
+      '</div>' +
+      '<div class="field-row" style="margin:6px 0 0;">' +
+        '<select data-act="assoc">' + selectOptions + '</select>' +
+      '</div>' +
+      '<div class="hint" data-act="distance" style="margin:2px 0 0;"></div>' +
+      '<div class="price-row" style="margin-top:6px;">' +
+        '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Date:</label>' +
+        '<input type="date" data-act="date" value="' + (site.date || '') + '">' +
+      '</div>';
+
+    card.querySelector('[data-act="remove"]').addEventListener('click', () => {
+      option.sites.splice(i, 1);
+      saveTrips(TRIPS);
+      renderTripSites(option);
+    });
+    card.querySelector('[data-act="date"]').addEventListener('change', e => { site.date = e.target.value || null; saveTrips(TRIPS); });
+    card.querySelector('[data-act="assoc"]').addEventListener('change', e => {
+      const val = e.target.value;
+      if (!val) {
+        site.assoc = null;
+      } else if (val.indexOf('camp:') === 0) {
+        site.assoc = { type: 'campground', stopId: val.slice(5) };
+      } else if (val.indexOf('drive:') === 0) {
+        const parts = val.split(':');
+        site.assoc = { type: 'driveday', fromStopId: parts[1], toStopId: parts[2] };
+      }
+      saveTrips(TRIPS);
+      updateSiteDistanceEl(card.querySelector('[data-act="distance"]'), site, option);
+    });
+
+    container.appendChild(card);
+    updateSiteDistanceEl(card.querySelector('[data-act="distance"]'), site, option);
+  });
+}
+
+async function updateSiteDistanceEl(el, site, option) {
+  const pin = getPin(site.pinId);
+  if (!pin) { el.textContent = ''; return; }
+  const p = effectivePin(pin);
+  if (!site.assoc) {
+    el.textContent = 'Not yet assigned to a campground or drive day — pick one above.';
+    return;
+  }
+  if (p.lat == null || p.lng == null) { el.textContent = ''; return; }
+
+  if (site.assoc.type === 'campground') {
+    const stop = option.stops.find(s => s.id === site.assoc.stopId);
+    const campPin = stop && getPin(stop.pinId);
+    if (!campPin) { el.textContent = 'That campground is no longer in this trip — pick another.'; return; }
+    const cp = effectivePin(campPin);
+    if (cp.lat == null) { el.textContent = ''; return; }
+    el.textContent = 'Calculating distance…';
+    const leg = await computeLegDistance(p, cp);
+    el.textContent = Math.round(leg.miles) + ' mi from ' + cp.name + (leg.estimated ? ' (straight-line est.)' : '');
+  } else if (site.assoc.type === 'driveday') {
+    const stopA = option.stops.find(s => s.id === site.assoc.fromStopId);
+    const stopB = option.stops.find(s => s.id === site.assoc.toStopId);
+    const campA = stopA && getPin(stopA.pinId);
+    const campB = stopB && getPin(stopB.pinId);
+    if (!campA || !campB) { el.textContent = 'That drive day is no longer in this trip — pick another.'; return; }
+    const ca = effectivePin(campA), cb = effectivePin(campB);
+    if (ca.lat == null || cb.lat == null) { el.textContent = ''; return; }
+    el.textContent = 'Calculating distances…';
+    const [legA, legB] = await Promise.all([computeLegDistance(p, ca), computeLegDistance(p, cb)]);
+    el.textContent = Math.round(legA.miles) + ' mi from ' + ca.name + ' / ' + Math.round(legB.miles) + ' mi from ' + cb.name +
+      (legA.estimated || legB.estimated ? ' (straight-line est.)' : '');
+  }
+}
+
+// ---- Trip map view: whole trip (campgrounds + sites) on a Leaflet map with the same icons
+// as the main map.
+function setTripViewMode(mode) {
+  tripViewMode = mode;
+  document.getElementById('trip-view-list').classList.toggle('active', mode === 'list');
+  document.getElementById('trip-view-map').classList.toggle('active', mode === 'map');
+  document.getElementById('trip-list-mode').classList.toggle('hidden', mode !== 'list');
+  document.getElementById('trip-map').classList.toggle('hidden', mode !== 'map');
+  if (mode === 'map') {
+    const option = getActiveOption();
+    if (option) setTimeout(() => renderTripMap(option), 50);
+  }
+}
+
+function initOrResetTripMap(centerLat, centerLng, zoom) {
+  if (!tripMap) {
+    tripMap = L.map('trip-map').setView([centerLat, centerLng], zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(tripMap);
+    tripLineLayer = L.layerGroup().addTo(tripMap);
+    tripMarkersLayer = L.layerGroup().addTo(tripMap);
+  } else {
+    tripMap.invalidateSize();
+  }
+}
+
+function renderTripMap(option) {
+  const campEntries = option.stops.map((s, i) => {
+    const pin = getPin(s.pinId);
+    if (!pin) return null;
+    const p = effectivePin(pin);
+    return p.lat != null ? { p: p, seq: i + 1 } : null;
+  }).filter(Boolean);
+  const siteEntries = (option.sites || []).map(s => {
+    const pin = getPin(s.pinId);
+    if (!pin) return null;
+    const p = effectivePin(pin);
+    return p.lat != null ? { p: p } : null;
+  }).filter(Boolean);
+
+  const center = campEntries[0] || siteEntries[0];
+  initOrResetTripMap(center ? center.p.lat : PLEASANTON.lat, center ? center.p.lng : PLEASANTON.lng, center ? 8 : 6);
+  tripMarkersLayer.clearLayers();
+  tripLineLayer.clearLayers();
+
+  const campLatLngs = campEntries.map(e => [e.p.lat, e.p.lng]);
+  if (campLatLngs.length > 1) {
+    L.polyline(campLatLngs, { color: '#2f5233', weight: 3, dashArray: '6,6', opacity: 0.7 }).addTo(tripLineLayer);
+  }
+
+  const bounds = [];
+  campEntries.forEach(entry => {
+    const marker = L.marker([entry.p.lat, entry.p.lng], { icon: getMarkerIcon(entry.p) });
+    marker.bindPopup('<b>' + entry.seq + '. ' + escapeHtml(entry.p.name) + '</b><br>' +
+      escapeHtml(entry.p.category + (entry.p.subcategory ? ' · ' + entry.p.subcategory : '')));
+    marker.on('click', () => { closeTripsTool(); openDetail(entry.p.id); });
+    tripMarkersLayer.addLayer(marker);
+    bounds.push([entry.p.lat, entry.p.lng]);
+  });
+  siteEntries.forEach(entry => {
+    const marker = L.marker([entry.p.lat, entry.p.lng], { icon: getMarkerIcon(entry.p) });
+    marker.bindPopup('<b>' + escapeHtml(entry.p.name) + '</b><br>' +
+      escapeHtml(entry.p.category + (entry.p.subcategory ? ' · ' + entry.p.subcategory : '')));
+    marker.on('click', () => { closeTripsTool(); openDetail(entry.p.id); });
+    tripMarkersLayer.addLayer(marker);
+    bounds.push([entry.p.lat, entry.p.lng]);
+  });
+
+  if (bounds.length > 1) tripMap.fitBounds(bounds, { padding: [24, 24] });
+  else if (bounds.length === 1) tripMap.setView(bounds[0], 10);
 }
 
 async function computeLegDistance(pinA, pinB) {
@@ -1584,7 +1829,7 @@ function init() {
   document.getElementById('trip-add-option-btn').addEventListener('click', () => {
     const trip = getActiveTrip();
     if (!trip) return;
-    const opt = { id: genId('opt'), name: 'Option ' + (trip.options.length + 1), stops: [] };
+    const opt = { id: genId('opt'), name: 'Option ' + (trip.options.length + 1), stops: [], sites: [] };
     trip.options.push(opt);
     activeOptionId = opt.id;
     saveTrips(TRIPS);
@@ -1609,6 +1854,8 @@ function init() {
     renderTripsListView();
   });
   document.getElementById('trip-stop-search').addEventListener('input', e => runTripStopSearch(e.target.value));
+  document.getElementById('trip-view-list').addEventListener('click', () => setTripViewMode('list'));
+  document.getElementById('trip-view-map').addEventListener('click', () => setTripViewMode('map'));
 
   document.getElementById('export-btn').addEventListener('click', exportEdits);
   document.getElementById('import-btn').addEventListener('click', () => document.getElementById('import-file').click());

@@ -308,8 +308,8 @@ html, body {
 #distance-results .list-card { margin-top: 8px; }
 #distance-status { font-size: 13px; color: var(--brown); margin: 8px 0; min-height: 18px; }
 
-#trips-list .list-card, #trip-stops-list .list-card, #trip-stop-search-results .list-card { margin-top: 8px; }
-#trip-stops-list .list-card button[data-act] {
+#trips-list .list-card, #trip-stops-list .list-card, #trip-sites-list .list-card, #trip-stop-search-results .list-card { margin-top: 8px; }
+#trip-stops-list .list-card button[data-act], #trip-sites-list .list-card button[data-act] {
   width: auto;
   padding: 4px 8px;
   border: 1px solid var(--border);
@@ -319,7 +319,21 @@ html, body {
   font-size: 13px;
 }
 #trip-stops-list .list-card button[data-act]:disabled { opacity: 0.35; cursor: default; }
+#trip-sites-list .list-card select[data-act="assoc"] { margin-bottom: 0; }
 #trip-options-tabs { flex-wrap: wrap; }
+.trip-section-heading {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--green);
+}
+#trip-map {
+  height: 320px;
+  border-radius: 8px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+}
 
 .leaflet-popup-content { font-size: 13px; }
 .leaflet-popup-content b { font-size: 14px; }
