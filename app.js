@@ -91,6 +91,56 @@ function saveCustomPins(pins) {
 }
 let CUSTOM_PINS = loadCustomPins();
 
+// ---------- Nearby towns/cities (live lookup, cached in the browser) ----------
+// Precomputed near_town/nearest_town_name/nearest_town_miles (from data.js) only ever
+// captured the single closest match, which could hide a bigger city a bit further away
+// (e.g. Henderson at 3mi hid Las Vegas at 8mi). This does a live lookup of every
+// city/town within ~10mi from the user's own browser (which has normal internet access)
+// and caches the result per-pin so it's fast on repeat visits.
+const NEARBY_TOWNS_KEY = 'campapp_nearby_towns_v1';
+const NEARBY_TOWNS_TTL_MS = 1000 * 60 * 60 * 24 * 90; // 90 days — towns don't move
+function loadNearbyTownsCache() {
+  try { return JSON.parse(localStorage.getItem(NEARBY_TOWNS_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+function saveNearbyTownsCache(cache) {
+  try { localStorage.setItem(NEARBY_TOWNS_KEY, JSON.stringify(cache)); } catch (e) { /* ignore */ }
+}
+let NEARBY_TOWNS_CACHE = loadNearbyTownsCache();
+
+async function fetchNearbyTowns(pinId, lat, lng) {
+  const cached = NEARBY_TOWNS_CACHE[pinId];
+  if (cached && (Date.now() - cached.fetchedAt) < NEARBY_TOWNS_TTL_MS) return cached.towns;
+
+  const milesToDeg = 10.5 / 69; // ~10.5mi of latitude margin, in degrees
+  const lngDeg = milesToDeg / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+  const south = lat - milesToDeg, north = lat + milesToDeg;
+  const west = lng - lngDeg, east = lng + lngDeg;
+  const query = '[out:json][timeout:20];node["place"~"^(city|town)$"](' +
+    south + ',' + west + ',' + north + ',' + east + ');out body;';
+  const url = 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query);
+
+  const resp = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined });
+  if (!resp.ok) throw new Error('Overpass error ' + resp.status);
+  const data = await resp.json();
+  const seen = new Set();
+  const towns = (data.elements || [])
+    .filter(el => el.tags && el.tags.name && el.lat != null && el.lon != null)
+    .map(el => ({ name: el.tags.name, miles: haversineMiles(lat, lng, el.lat, el.lon) }))
+    .filter(t => t.miles <= 10)
+    .sort((a, b) => a.miles - b.miles)
+    .filter(t => {
+      const key = t.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  NEARBY_TOWNS_CACHE[pinId] = { fetchedAt: Date.now(), towns: towns };
+  saveNearbyTownsCache(NEARBY_TOWNS_CACHE);
+  return towns;
+}
+
 function allPins() { return PINS.concat(CUSTOM_PINS); }
 
 function getPin(id) { return allPins().find(p => p.id === id); }
@@ -202,6 +252,15 @@ function metaLine(p) {
   return parts.filter(Boolean).join(' · ');
 }
 
+function nearbyTownsHtml(towns, p) {
+  if (!towns || !towns.length) {
+    return p.nearest_town_name
+      ? escapeHtml(p.nearest_town_name) + ' (' + p.nearest_town_miles + ' mi)'
+      : 'None found within 10 miles.';
+  }
+  return towns.map(t => escapeHtml(t.name) + ' (' + (Math.round(t.miles * 10) / 10) + ' mi)').join(', ');
+}
+
 function haversineMiles(lat1, lng1, lat2, lng2) {
   const R = 3958.8;
   const toRad = d => d * Math.PI / 180;
@@ -281,8 +340,11 @@ function buildDetailHtml(p) {
       ? Math.round(p.driving_miles_from_pleasanton) + ' mi (~' + Math.round(p.driving_minutes_from_pleasanton / 6) / 10 + ' hr drive)'
       : 'Not computed (likely over 400mi)') + '</div></div>');
   if (bestMonths.length) rows.push('<div class="field-row"><label>Best months</label><div class="field-static">' + bestMonths.join(', ') + '</div></div>');
-  if (p.category === 'Camping' && p.nearest_town_name) {
-    rows.push('<div class="field-row"><label>Nearest town</label><div class="field-static">' + escapeHtml(p.nearest_town_name) + ' (' + p.nearest_town_miles + ' mi' + (p.near_town ? ', within 10mi' : '') + ')</div></div>');
+  if (p.category === 'Camping') {
+    const cachedTowns = NEARBY_TOWNS_CACHE[p.id] && NEARBY_TOWNS_CACHE[p.id].towns;
+    rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><div id="nearby-towns-box" class="field-static">' +
+      (cachedTowns ? nearbyTownsHtml(cachedTowns, p) : (p.nearest_town_name ? escapeHtml(p.nearest_town_name) + ' (' + p.nearest_town_miles + ' mi) — checking for more nearby…' : 'Checking nearby towns &amp; cities…')) +
+      '</div></div>');
   }
   if (p.park_type) rows.push('<div class="field-row"><label>Park type</label><div class="field-static">' + escapeHtml(p.park_type) + '</div></div>');
   if (p.reservation_timing) rows.push('<div class="field-row"><label>Reservation timing</label><div class="field-static">' + escapeHtml(p.reservation_timing) + '</div></div>');
@@ -293,20 +355,38 @@ function buildDetailHtml(p) {
     rows.push('<div class="field-row"><label>Max nights</label><div class="field-static">' + escapeHtml(bits.join(' / ')) + '</div></div>');
   }
 
-  if (p.nearby_alltrails_hikes && p.nearby_alltrails_hikes.length) {
-    const hikeRows = p.nearby_alltrails_hikes
-      .slice()
-      .sort((a, b) => b.rating - a.rating)
-      .map(h =>
+  {
+    const hikes = (p.nearby_alltrails_hikes || []).slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
+    const hikeRows = hikes.map((h, i) =>
         '<div class="list-card" style="cursor:default;">' +
           '<div class="list-card-main">' +
             '<div class="list-card-name">' + escapeHtml(h.name) + '</div>' +
-            '<div class="list-card-meta">★' + h.rating + ' · ' + h.length_miles + ' mi · ' + escapeHtml(h.difficulty) + ' · ' + escapeHtml(h.route_type) + ' · ' + h.trailhead_distance_miles + ' mi from campground</div>' +
-            '<a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener">View on AllTrails &rarr;</a>' +
+            '<div class="list-card-meta">' + (h.rating != null ? '★' + h.rating + ' · ' : '') + (h.length_miles != null ? h.length_miles + ' mi · ' : '') +
+              (h.difficulty ? escapeHtml(h.difficulty) + ' · ' : '') + (h.route_type ? escapeHtml(h.route_type) + ' · ' : '') +
+              (h.trailhead_distance_miles != null ? h.trailhead_distance_miles + ' mi from campground' : '') + '</div>' +
+            (h.url ? '<a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener">View on AllTrails &rarr;</a>' : '') +
           '</div>' +
+          '<button class="hike-remove-btn" data-hike-index="' + i + '" title="Remove this hike" style="background:none;border:none;color:#b5493b;font-size:18px;cursor:pointer;">&times;</button>' +
         '</div>'
       ).join('');
-    rows.push('<div class="field-row"><label>Top-rated hikes nearby (AllTrails, 4.8★+)</label>' + hikeRows + '</div>');
+    rows.push('<div class="field-row"><label>Nearby hikes</label>' +
+      (hikeRows || '<div class="field-static" style="margin-bottom:6px;">None added yet.</div>') +
+      '<button id="hike-add-toggle-btn" class="secondary-btn" type="button">+ Add a hike</button>' +
+      '<div id="hike-add-form" class="hidden" style="margin-top:8px;">' +
+        '<div class="field-row"><label>Trail name</label><input type="text" id="hike-name" placeholder="e.g. Bridalveil Fall Trail"></div>' +
+        '<div class="price-row">' +
+          '<input type="number" id="hike-rating" placeholder="Rating (0-5)" min="0" max="5" step="0.1">' +
+          '<input type="number" id="hike-length" placeholder="Length (mi)" min="0" step="0.1">' +
+        '</div>' +
+        '<div class="price-row">' +
+          '<select id="hike-difficulty"><option value="">Difficulty...</option><option value="Easy">Easy</option><option value="Moderate">Moderate</option><option value="Hard">Hard</option></select>' +
+          '<input type="text" id="hike-route-type" placeholder="Route type (e.g. Loop)">' +
+        '</div>' +
+        '<div class="field-row"><label>Distance from this pin (mi)</label><input type="number" id="hike-trailhead-distance" min="0" step="0.1"></div>' +
+        '<div class="field-row"><label>AllTrails (or other) link</label><input type="text" id="hike-url" placeholder="https://..."></div>' +
+        '<button id="hike-save-btn" class="secondary-btn" type="button">Save hike</button>' +
+      '</div>' +
+    '</div>');
   }
 
   rows.push('<div class="toggle-row"><span>' + (p.is_campground ? 'Visited' : 'Done') + '</span>' +
@@ -315,10 +395,17 @@ function buildDetailHtml(p) {
   rows.push('<div class="field-row"><label>Price per night ($)</label><input type="number" id="detail-price" min="0" value="' + (p.price_usd != null ? p.price_usd : '') + '"></div>');
   rows.push('<div class="field-row"><label>Hookups</label><input type="text" id="detail-hookups" value="' + escapeHtml((p.hookup_types || []).join(', ')) + '" placeholder="e.g. FHU, W&E, Dry"></div>');
   rows.push('<div class="field-row"><label>Website / booking URL</label><input type="text" id="detail-url" value="' + escapeHtml(p.url || '') + '"></div>');
+  rows.push('<div class="field-row"><label>Reservation / booking timing</label><input type="text" id="detail-reservation-timing" value="' + escapeHtml(p.reservation_timing || '') + '" placeholder="e.g. 6 months in advance, first-come first-served"></div>');
+  rows.push('<div id="detail-tag-checks">' +
+    '<label class="checkbox-row"><input type="checkbox" id="detail-starlink" ' + (p.starlink_friendly ? 'checked' : '') + '> Starlink Friendly</label>' +
+    '<label class="checkbox-row"><input type="checkbox" id="detail-hatch" ' + (p.good_for_hatch ? 'checked' : '') + '> Good for Hatch</label>' +
+    '<label class="checkbox-row"><input type="checkbox" id="detail-bookable" ' + (p.bookable ? 'checked' : '') + '> Bookable</label>' +
+  '</div>');
   rows.push('<div class="field-row"><label>Notes / best sites</label><textarea id="detail-notes">' + escapeHtml(p.notes || '') + '</textarea></div>');
 
   rows.push('<button id="detail-save-btn" class="primary-btn">Save changes</button>');
   rows.push('<button id="detail-nearby-btn" class="secondary-btn">Find campgrounds/sites near this pin</button>');
+  rows.push('<button id="detail-addtrip-btn" class="secondary-btn">Add to a trip</button>');
   if (p.is_custom) {
     rows.push('<button id="detail-edit-pin-btn" class="secondary-btn">Edit name / category / location</button>');
     rows.push('<button id="detail-delete-pin-btn" class="secondary-btn" style="color:#b5493b;">Delete this pin</button>');
@@ -336,6 +423,11 @@ function wireDetailEvents(p) {
     fields.hookup_types = hookupsRaw.split(',').map(s => s.trim()).filter(Boolean);
     const urlVal = document.getElementById('detail-url').value.trim();
     fields.url = urlVal || null;
+    const reservationVal = document.getElementById('detail-reservation-timing').value.trim();
+    fields.reservation_timing = reservationVal || null;
+    fields.starlink_friendly = document.getElementById('detail-starlink').checked;
+    fields.good_for_hatch = document.getElementById('detail-hatch').checked;
+    fields.bookable = document.getElementById('detail-bookable').checked;
     fields.notes = document.getElementById('detail-notes').value;
     const statusChecked = document.getElementById('detail-status-toggle').checked;
     if (p.is_campground) fields.visited = statusChecked; else fields.done = statusChecked;
@@ -347,6 +439,52 @@ function wireDetailEvents(p) {
     closeDetail();
     openDistanceTool({ id: 'custom_' + p.id, label: p.name, lat: p.lat, lng: p.lng, excludeId: p.id });
   };
+  document.getElementById('detail-addtrip-btn').onclick = () => {
+    closeDetail();
+    openTripsTool(p.id);
+  };
+
+  const hikeToggleBtn = document.getElementById('hike-add-toggle-btn');
+  if (hikeToggleBtn) {
+    hikeToggleBtn.onclick = () => {
+      document.getElementById('hike-add-form').classList.toggle('hidden');
+    };
+  }
+  const hikeSaveBtn = document.getElementById('hike-save-btn');
+  if (hikeSaveBtn) {
+    hikeSaveBtn.onclick = () => {
+      const name = document.getElementById('hike-name').value.trim();
+      if (!name) { alert('Please enter a trail name.'); return; }
+      const ratingVal = document.getElementById('hike-rating').value;
+      const lengthVal = document.getElementById('hike-length').value;
+      const distVal = document.getElementById('hike-trailhead-distance').value;
+      const hike = {
+        name: name,
+        rating: ratingVal === '' ? null : parseFloat(ratingVal),
+        length_miles: lengthVal === '' ? null : parseFloat(lengthVal),
+        difficulty: document.getElementById('hike-difficulty').value || null,
+        route_type: document.getElementById('hike-route-type').value.trim() || null,
+        trailhead_distance_miles: distVal === '' ? null : parseFloat(distVal),
+        url: document.getElementById('hike-url').value.trim() || null,
+        manually_added: true
+      };
+      const currentHikes = (p.nearby_alltrails_hikes || []).slice();
+      currentHikes.push(hike);
+      updatePinEdit(p.id, { nearby_alltrails_hikes: currentHikes });
+      openDetail(p.id);
+    };
+  }
+  document.querySelectorAll('.hike-remove-btn').forEach(btn => {
+    btn.onclick = () => {
+      const displayedHikes = (p.nearby_alltrails_hikes || []).slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      const toRemove = displayedHikes[parseInt(btn.getAttribute('data-hike-index'), 10)];
+      if (!confirm('Remove "' + toRemove.name + '" from this pin\'s hikes?')) return;
+      const currentHikes = (p.nearby_alltrails_hikes || []).filter(h => h !== toRemove);
+      updatePinEdit(p.id, { nearby_alltrails_hikes: currentHikes });
+      openDetail(p.id);
+    };
+  });
+
   const editBtn = document.getElementById('detail-edit-pin-btn');
   if (editBtn) editBtn.onclick = () => { closeDetail(); openAddForm(p); };
   const delBtn = document.getElementById('detail-delete-pin-btn');
@@ -365,6 +503,18 @@ function openDetail(id) {
   document.getElementById('detail-content').innerHTML = buildDetailHtml(p);
   document.getElementById('detail-overlay').classList.remove('hidden');
   wireDetailEvents(p);
+
+  if (p.category === 'Camping' && p.lat != null && p.lng != null) {
+    fetchNearbyTowns(p.id, p.lat, p.lng).then(towns => {
+      const box = document.getElementById('nearby-towns-box');
+      if (box) box.innerHTML = nearbyTownsHtml(towns, p);
+    }).catch(() => {
+      const box = document.getElementById('nearby-towns-box');
+      if (box && !NEARBY_TOWNS_CACHE[p.id]) {
+        box.innerHTML = (p.nearest_town_name ? escapeHtml(p.nearest_town_name) + ' (' + p.nearest_town_miles + ' mi)' : 'Unavailable right now') + ' <span class="hint" style="display:inline;">— couldn\'t reach the map service for a fuller list (offline?)</span>';
+      }
+    });
+  }
 }
 
 function closeDetail() {
@@ -373,6 +523,7 @@ function closeDetail() {
 
 // ---------- Distance tool ----------
 let customOrigins = {};
+let distanceSelectedSubcats = new Set();
 let distanceViewMode = 'list';
 let distanceMap = null;
 let distanceMarkersLayer = null;
@@ -397,7 +548,7 @@ function openDistanceTool(custom) {
   document.getElementById('distance-status').textContent = '';
   lastDistanceResults = null;
   lastDistanceOrigin = null;
-  populateSubcatOptions(document.getElementById('distance-category').value, 'distance-subcat-row', 'distance-subcategory', true);
+  populateDistanceSubcatChecks(document.getElementById('distance-category').value);
   setDistanceViewMode('list');
   document.getElementById('distance-overlay').classList.remove('hidden');
 }
@@ -454,7 +605,6 @@ async function runDistanceSearch() {
   const maxRaw = document.getElementById('distance-max').value;
   const maxMi = maxRaw === '' ? Infinity : (parseFloat(maxRaw) || 50);
   const categoryVal = document.getElementById('distance-category').value;
-  const subcategoryVal = document.getElementById('distance-subcategory').value;
   const monthVal = document.getElementById('distance-month').value;
   const useDriving = document.getElementById('distance-use-driving').checked;
   const statusEl = document.getElementById('distance-status');
@@ -470,7 +620,7 @@ async function runDistanceSearch() {
 
   let basePins = allPins().filter(p => !(origin.excludeId && p.id === origin.excludeId));
   if (categoryVal) basePins = basePins.filter(p => effectivePin(p).category === categoryVal);
-  if (subcategoryVal) basePins = basePins.filter(p => effectivePin(p).subcategory === subcategoryVal);
+  if (distanceSelectedSubcats.size) basePins = basePins.filter(p => distanceSelectedSubcats.has(effectivePin(p).subcategory));
   if (monthVal) basePins = basePins.filter(p => { const bm = getBestMonths(effectivePin(p)); return bm && bm.includes(monthVal); });
 
   const prefilterCap = maxMi === Infinity ? 1000 : maxMi * 2;
@@ -545,6 +695,258 @@ async function runDistanceSearch() {
   if (distanceViewMode === 'map') renderDistanceMap(within, origin);
 }
 
+// ---------- Trip planner ----------
+const TRIPS_KEY = 'campapp_trips_v1';
+function loadTrips() {
+  try { return JSON.parse(localStorage.getItem(TRIPS_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function saveTrips(trips) {
+  try { localStorage.setItem(TRIPS_KEY, JSON.stringify(trips)); } catch (e) { /* ignore */ }
+}
+let TRIPS = loadTrips();
+
+let activeTripId = null;
+let activeOptionId = null;
+let tripPickerPinId = null;
+const legCache = {}; // "idA|idB" -> {miles, minutes, estimated}
+
+function genId(prefix) { return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7); }
+
+function openTripsTool(forPinId) {
+  tripPickerPinId = forPinId || null;
+  document.getElementById('trips-overlay').classList.remove('hidden');
+  renderTripsListView();
+}
+
+function closeTripsTool() {
+  document.getElementById('trips-overlay').classList.add('hidden');
+  tripPickerPinId = null;
+}
+
+function renderTripsListView() {
+  activeTripId = null;
+  activeOptionId = null;
+  document.getElementById('trip-detail-view').classList.add('hidden');
+  document.getElementById('trips-list-view').classList.remove('hidden');
+  const banner = document.getElementById('trip-picker-banner');
+  if (tripPickerPinId) {
+    const pin = getPin(tripPickerPinId);
+    banner.classList.remove('hidden');
+    banner.textContent = 'Choose a trip (and then an option) to add "' + (pin ? pin.name : 'this pin') + '" to.';
+  } else {
+    banner.classList.add('hidden');
+    banner.textContent = '';
+  }
+  const list = document.getElementById('trips-list');
+  list.innerHTML = '';
+  if (!TRIPS.length) {
+    list.innerHTML = '<div class="field-static" style="margin-bottom:8px;">No trips yet — create one below.</div>';
+  }
+  TRIPS.forEach(trip => {
+    const stopCount = trip.options.reduce((sum, o) => sum + o.stops.length, 0);
+    const card = document.createElement('div');
+    card.className = 'list-card';
+    card.innerHTML = '<div class="list-card-main"><div class="list-card-name">' + escapeHtml(trip.name) + '</div>' +
+      '<div class="list-card-meta">' + trip.options.length + ' option' + (trip.options.length === 1 ? '' : 's') + ' · ' + stopCount + ' stop' + (stopCount === 1 ? '' : 's') + '</div></div>';
+    card.addEventListener('click', () => openTripDetail(trip.id));
+    list.appendChild(card);
+  });
+  document.getElementById('new-trip-name').value = '';
+}
+
+function createTrip() {
+  const nameInput = document.getElementById('new-trip-name');
+  const name = nameInput.value.trim();
+  if (!name) { alert('Please enter a trip name.'); return; }
+  const trip = { id: genId('trip'), name: name, options: [{ id: genId('opt'), name: 'Option 1', stops: [] }] };
+  TRIPS.push(trip);
+  saveTrips(TRIPS);
+  openTripDetail(trip.id);
+}
+
+function openTripDetail(tripId) {
+  activeTripId = tripId;
+  const trip = TRIPS.find(t => t.id === tripId);
+  if (!trip) return;
+  activeOptionId = trip.options[0].id;
+  document.getElementById('trips-list-view').classList.add('hidden');
+  document.getElementById('trip-detail-view').classList.remove('hidden');
+  renderTripDetail();
+}
+
+function getActiveTrip() { return TRIPS.find(t => t.id === activeTripId); }
+function getActiveOption() {
+  const trip = getActiveTrip();
+  if (!trip) return null;
+  return trip.options.find(o => o.id === activeOptionId) || trip.options[0];
+}
+
+function renderTripDetail() {
+  const trip = getActiveTrip();
+  if (!trip) { renderTripsListView(); return; }
+  if (!trip.options.find(o => o.id === activeOptionId)) activeOptionId = trip.options[0].id;
+  const option = getActiveOption();
+
+  document.getElementById('trip-name-input').value = trip.name;
+
+  const tabsEl = document.getElementById('trip-options-tabs');
+  tabsEl.innerHTML = '';
+  trip.options.forEach(o => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = o.name;
+    btn.className = o.id === activeOptionId ? 'active' : '';
+    btn.addEventListener('click', () => { activeOptionId = o.id; renderTripDetail(); });
+    tabsEl.appendChild(btn);
+  });
+
+  document.getElementById('trip-delete-option-btn').classList.toggle('hidden', trip.options.length <= 1);
+
+  const pickerRow = document.getElementById('trip-picker-add-row');
+  if (tripPickerPinId) {
+    const pin = getPin(tripPickerPinId);
+    pickerRow.classList.remove('hidden');
+    pickerRow.innerHTML = '<button id="trip-add-picked-btn" class="primary-btn" type="button">+ Add "' + escapeHtml(pin ? pin.name : '') + '" to ' + escapeHtml(option.name) + '</button>';
+    document.getElementById('trip-add-picked-btn').onclick = () => {
+      addStopToOption(option, tripPickerPinId);
+      tripPickerPinId = null;
+      renderTripDetail();
+    };
+  } else {
+    pickerRow.classList.add('hidden');
+    pickerRow.innerHTML = '';
+  }
+
+  renderTripStops(option);
+  document.getElementById('trip-stop-search').value = '';
+  document.getElementById('trip-stop-search-results').innerHTML = '';
+}
+
+function addStopToOption(option, pinId, date) {
+  option.stops.push({ pinId: pinId, date: date || null, notes: '' });
+  saveTrips(TRIPS);
+}
+
+function renderTripStops(option) {
+  const container = document.getElementById('trip-stops-list');
+  container.innerHTML = '';
+  if (!option.stops.length) {
+    container.innerHTML = '<div class="field-static">No stops yet — search below to add one.</div>';
+    return;
+  }
+  option.stops.forEach((stop, i) => {
+    const pin = getPin(stop.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    const card = document.createElement('div');
+    card.className = 'list-card';
+    card.style.cursor = 'default';
+    card.style.flexDirection = 'column';
+    card.style.alignItems = 'stretch';
+    card.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;">' +
+        '<div class="list-card-main">' +
+          '<div class="list-card-name">' + (i + 1) + '. ' + escapeHtml(p ? p.name : '(pin no longer available)') + '</div>' +
+          '<div class="list-card-meta">' + (p ? escapeHtml(p.category + (p.subcategory ? ' · ' + p.subcategory : '')) : '') + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:4px;flex-shrink:0;">' +
+          '<button data-act="up" type="button" ' + (i === 0 ? 'disabled' : '') + ' title="Move earlier">&uarr;</button>' +
+          '<button data-act="down" type="button" ' + (i === option.stops.length - 1 ? 'disabled' : '') + ' title="Move later">&darr;</button>' +
+          '<button data-act="remove" type="button" title="Remove" style="color:#b5493b;">&times;</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="price-row" style="margin-top:6px;">' +
+        '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Date:</label>' +
+        '<input type="date" data-act="date" value="' + (stop.date || '') + '">' +
+      '</div>';
+    card.querySelector('[data-act="up"]').addEventListener('click', () => moveStop(option, i, -1));
+    card.querySelector('[data-act="down"]').addEventListener('click', () => moveStop(option, i, 1));
+    card.querySelector('[data-act="remove"]').addEventListener('click', () => removeStop(option, i));
+    card.querySelector('[data-act="date"]').addEventListener('change', e => { stop.date = e.target.value || null; saveTrips(TRIPS); });
+    container.appendChild(card);
+
+    if (i < option.stops.length - 1) {
+      const nextPin = getPin(option.stops[i + 1].pinId);
+      const legEl = document.createElement('div');
+      legEl.className = 'hint';
+      legEl.style.margin = '2px 0 2px 10px';
+      container.appendChild(legEl);
+      if (p && nextPin && p.lat != null && p.lng != null) {
+        const nextP = effectivePin(nextPin);
+        legEl.textContent = 'Calculating drive...';
+        computeLegDistance(p, nextP).then(leg => {
+          legEl.textContent = '↓ ' + Math.round(leg.miles) + ' mi' +
+            (leg.minutes != null ? ' (~' + Math.round(leg.minutes / 6) / 10 + ' hr)' : '') +
+            (leg.estimated ? ' — straight-line est.' : ' drive');
+        });
+      }
+    }
+  });
+}
+
+function moveStop(option, index, dir) {
+  const newIndex = index + dir;
+  if (newIndex < 0 || newIndex >= option.stops.length) return;
+  const tmp = option.stops[index];
+  option.stops[index] = option.stops[newIndex];
+  option.stops[newIndex] = tmp;
+  saveTrips(TRIPS);
+  renderTripStops(option);
+}
+
+function removeStop(option, index) {
+  option.stops.splice(index, 1);
+  saveTrips(TRIPS);
+  renderTripStops(option);
+}
+
+async function computeLegDistance(pinA, pinB) {
+  const key = pinA.id + '|' + pinB.id;
+  if (legCache[key]) return legCache[key];
+  const straight = haversineMiles(pinA.lat, pinA.lng, pinB.lat, pinB.lng);
+  try {
+    const url = 'https://router.project-osrm.org/route/v1/driving/' + pinA.lng + ',' + pinA.lat + ';' + pinB.lng + ',' + pinB.lat + '?overview=false';
+    const resp = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined });
+    if (!resp.ok) throw new Error('OSRM error');
+    const data = await resp.json();
+    const route = data.routes && data.routes[0];
+    if (!route) throw new Error('no route');
+    const leg = { miles: route.distance / 1609.34, minutes: route.duration / 60, estimated: false };
+    legCache[key] = leg;
+    return leg;
+  } catch (e) {
+    const leg = { miles: straight, minutes: null, estimated: true };
+    legCache[key] = leg;
+    return leg;
+  }
+}
+
+function runTripStopSearch(q) {
+  const resultsEl = document.getElementById('trip-stop-search-results');
+  resultsEl.innerHTML = '';
+  if (!q || q.trim().length < 2) return;
+  const ql = q.toLowerCase();
+  const matches = allPins().map(effectivePin).filter(p => p.name.toLowerCase().indexOf(ql) !== -1).slice(0, 15);
+  if (!matches.length) {
+    resultsEl.innerHTML = '<div class="field-static">No matches.</div>';
+    return;
+  }
+  matches.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'list-card';
+    row.innerHTML = '<div class="list-card-main"><div class="list-card-name">' + escapeHtml(p.name) + '</div>' +
+      '<div class="list-card-meta">' + escapeHtml(p.category + (p.subcategory ? ' · ' + p.subcategory : '')) + '</div></div>' +
+      '<button type="button" class="secondary-btn" style="width:auto;">+ Add</button>';
+    row.addEventListener('click', () => {
+      const option = getActiveOption();
+      if (!option) return;
+      addStopToOption(option, p.id);
+      renderTripDetail();
+    });
+    resultsEl.appendChild(row);
+  });
+}
+
 // ---------- Add / Edit custom pin ----------
 let addMap = null;
 let addMarker = null;
@@ -567,6 +969,25 @@ function populateSubcatOptions(category, rowId, selectId, includeAnyOption) {
 
 function populateAddSubcatOptions(category) {
   populateSubcatOptions(category, 'add-subcat-row', 'add-subcategory', false);
+}
+
+function populateDistanceSubcatChecks(category) {
+  const row = document.getElementById('distance-subcat-row');
+  const container = document.getElementById('distance-subcat-checks');
+  distanceSelectedSubcats.clear();
+  container.innerHTML = '';
+  const subcats = CATEGORY_SUBCATS[category];
+  if (!subcats) { row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+  subcats.forEach(sc => {
+    const label = document.createElement('label');
+    label.className = 'checkbox-row';
+    label.innerHTML = '<input type="checkbox"> ' + escapeHtml(sc);
+    label.querySelector('input').addEventListener('change', e => {
+      if (e.target.checked) distanceSelectedSubcats.add(sc); else distanceSelectedSubcats.delete(sc);
+    });
+    container.appendChild(label);
+  });
 }
 
 function updateAddCampingChecksVisibility(category) {
@@ -819,7 +1240,7 @@ function clearFilters() {
 
 // ---------- Export / Import edits ----------
 function exportEdits() {
-  const payload = { edits: EDITS, customPins: CUSTOM_PINS };
+  const payload = { edits: EDITS, customPins: CUSTOM_PINS, trips: TRIPS };
   const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -842,9 +1263,23 @@ function importEditsFile(file) {
         (Object.prototype.hasOwnProperty.call(imported, 'edits') || Object.prototype.hasOwnProperty.call(imported, 'customPins'));
       const importedEdits = hasWrapper ? (imported.edits || {}) : imported;
       const importedCustomPins = hasWrapper ? (imported.customPins || []) : [];
+      const importedTrips = hasWrapper ? (imported.trips || []) : [];
 
       EDITS = Object.assign({}, EDITS, importedEdits);
       saveEdits(EDITS);
+
+      if (importedTrips.length) {
+        const existingTripIds = new Set(TRIPS.map(t => t.id));
+        importedTrips.forEach(t => {
+          if (existingTripIds.has(t.id)) {
+            TRIPS = TRIPS.map(et => et.id === t.id ? t : et);
+          } else {
+            TRIPS.push(t);
+            existingTripIds.add(t.id);
+          }
+        });
+        saveTrips(TRIPS);
+      }
 
       if (importedCustomPins.length) {
         const existingIds = new Set(CUSTOM_PINS.map(p => p.id));
@@ -902,10 +1337,51 @@ function init() {
   document.getElementById('distance-overlay').addEventListener('click', e => { if (e.target.id === 'distance-overlay') closeDistanceTool(); });
   document.getElementById('distance-run-btn').addEventListener('click', runDistanceSearch);
   document.getElementById('distance-category').addEventListener('change', e => {
-    populateSubcatOptions(e.target.value, 'distance-subcat-row', 'distance-subcategory', true);
+    populateDistanceSubcatChecks(e.target.value);
   });
   document.getElementById('distance-view-list').addEventListener('click', () => setDistanceViewMode('list'));
   document.getElementById('distance-view-map').addEventListener('click', () => setDistanceViewMode('map'));
+
+  document.getElementById('trips-tool-btn').addEventListener('click', () => openTripsTool());
+  document.getElementById('trips-close').addEventListener('click', closeTripsTool);
+  document.getElementById('trips-overlay').addEventListener('click', e => { if (e.target.id === 'trips-overlay') closeTripsTool(); });
+  document.getElementById('new-trip-btn').addEventListener('click', createTrip);
+  document.getElementById('trip-back-btn').addEventListener('click', renderTripsListView);
+  document.getElementById('trip-name-input').addEventListener('change', e => {
+    const trip = getActiveTrip();
+    if (!trip) return;
+    trip.name = e.target.value.trim() || trip.name;
+    e.target.value = trip.name;
+    saveTrips(TRIPS);
+  });
+  document.getElementById('trip-add-option-btn').addEventListener('click', () => {
+    const trip = getActiveTrip();
+    if (!trip) return;
+    const opt = { id: genId('opt'), name: 'Option ' + (trip.options.length + 1), stops: [] };
+    trip.options.push(opt);
+    activeOptionId = opt.id;
+    saveTrips(TRIPS);
+    renderTripDetail();
+  });
+  document.getElementById('trip-delete-option-btn').addEventListener('click', () => {
+    const trip = getActiveTrip();
+    if (!trip || trip.options.length <= 1) return;
+    const option = getActiveOption();
+    if (!confirm('Delete "' + option.name + '" and its stops?')) return;
+    trip.options = trip.options.filter(o => o.id !== option.id);
+    activeOptionId = trip.options[0].id;
+    saveTrips(TRIPS);
+    renderTripDetail();
+  });
+  document.getElementById('trip-delete-btn').addEventListener('click', () => {
+    const trip = getActiveTrip();
+    if (!trip) return;
+    if (!confirm('Delete the whole trip "' + trip.name + '"? This can\'t be undone.')) return;
+    TRIPS = TRIPS.filter(t => t.id !== trip.id);
+    saveTrips(TRIPS);
+    renderTripsListView();
+  });
+  document.getElementById('trip-stop-search').addEventListener('input', e => runTripStopSearch(e.target.value));
 
   document.getElementById('export-btn').addEventListener('click', exportEdits);
   document.getElementById('import-btn').addEventListener('click', () => document.getElementById('import-file').click());

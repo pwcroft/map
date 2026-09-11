@@ -19,6 +19,7 @@
     <button id="view-toggle-map" class="view-btn active">Map</button>
     <button id="view-toggle-list" class="view-btn">List</button>
     <button id="distance-tool-btn" title="Find nearby">&#128205; Nearby</button>
+    <button id="trips-tool-btn" title="Plan a trip">&#128203; Trips</button>
     <button id="add-pin-btn" title="Add a new campground or site">+ Add</button>
   </div>
 </header>
@@ -164,8 +165,8 @@
     </div>
 
     <div class="field-row hidden" id="distance-subcat-row">
-      <label>Type</label>
-      <select id="distance-subcategory"></select>
+      <label>Type (pick any number, or leave blank for all)</label>
+      <div id="distance-subcat-checks"></div>
     </div>
 
     <div class="field-row">
@@ -198,6 +199,49 @@
 
     <div id="distance-results"></div>
     <div id="distance-map" class="hidden"></div>
+  </div>
+</div>
+
+<!-- Trip planner panel -->
+<div id="trips-overlay" class="hidden">
+  <div id="trips-panel">
+    <button id="trips-close" aria-label="Close">&times;</button>
+
+    <div id="trips-list-view">
+      <h2>Your Trips</h2>
+      <div id="trip-picker-banner" class="hidden field-static" style="margin-bottom:10px;color:var(--green);font-weight:600;"></div>
+      <div id="trips-list"></div>
+      <div class="field-row" style="margin-top:12px;">
+        <label>New trip</label>
+        <div class="price-row">
+          <input type="text" id="new-trip-name" placeholder="e.g. Summer 2027 Loop">
+          <button id="new-trip-btn" class="secondary-btn" style="width:auto;" type="button">+ Create</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="trip-detail-view" class="hidden">
+      <button id="trip-back-btn" class="secondary-btn" type="button">&larr; All trips</button>
+      <div class="field-row"><label>Trip name</label><input type="text" id="trip-name-input"></div>
+
+      <div id="trip-options-tabs" class="panel-view-toggle"></div>
+      <div class="price-row">
+        <button id="trip-add-option-btn" class="secondary-btn" type="button">+ Add option</button>
+        <button id="trip-delete-option-btn" class="secondary-btn hidden" type="button" style="color:#b5493b;">Delete this option</button>
+      </div>
+
+      <div id="trip-picker-add-row" class="hidden" style="margin:10px 0;"></div>
+
+      <div id="trip-stops-list"></div>
+
+      <div class="field-row" style="margin-top:10px;">
+        <label>Add a stop</label>
+        <input type="text" id="trip-stop-search" placeholder="Search campgrounds / activities by name...">
+        <div id="trip-stop-search-results"></div>
+      </div>
+
+      <button id="trip-delete-btn" class="secondary-btn" type="button" style="color:#b5493b;margin-top:16px;">Delete this trip</button>
+    </div>
   </div>
 </div>
 
