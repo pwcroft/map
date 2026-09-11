@@ -6,12 +6,11 @@ const PLEASANTON = { lat: 37.6624, lng: -121.8747 };
 const EDITS_KEY = 'campapp_edits_v1';
 const CUSTOM_PINS_KEY = 'campapp_custom_pins_v1';
 
-const SEASON_MONTHS = {
-  Spring: ['Mar', 'Apr', 'May'],
-  Summer: ['Jun', 'Jul', 'Aug'],
-  Fall: ['Sep', 'Oct', 'Nov'],
-  Winter: ['Dec', 'Jan', 'Feb']
-};
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// "Cool season" months get a relaxed daytime-high floor (55°F instead of 60°F) per Laura's
+// weather criteria — matches the same methodology used in her Campground Road Trip Planner
+// spreadsheet's "Climate by Month" tab (58 curated regions, baked into AREAS below).
+const COOL_SEASON_MONTHS = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 
 const CATEGORY_ORDER = ['Camping', 'Things To Do', 'Food & Drink'];
 const CAMPING_SUBCATS = ['Public', 'Private', 'Boondocking'];
@@ -141,6 +140,121 @@ async function fetchNearbyTowns(pinId, lat, lng) {
   return towns;
 }
 
+// ---------- Best months by climate (live lookup, cached in the browser) ----------
+// For the 58 curated areas in AREAS, month-level best-months data already comes straight
+// from Laura's spreadsheet (months_that_pass — see getBestMonths). For any pin outside those
+// areas, this fetches ~10 years of daily history from Open-Meteo (free, no key, CORS-open)
+// straight from the user's browser and scores each calendar month against her 3 criteria:
+//   1. Daytime high 60-80°F (relaxed to 55-80°F Nov-Mar)
+//   2. Overnight low always above freezing
+//   3. Monthly rainfall <= 2.5"
+const CLIMATE_KEY = 'campapp_climate_v1';
+const CLIMATE_TTL_MS = 1000 * 60 * 60 * 24 * 180; // 180 days — climate normals barely change
+function loadClimateCache() {
+  try { return JSON.parse(localStorage.getItem(CLIMATE_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+function saveClimateCache(cache) {
+  try { localStorage.setItem(CLIMATE_KEY, JSON.stringify(cache)); } catch (e) { /* ignore */ }
+}
+let CLIMATE_CACHE = loadClimateCache();
+
+function monthsPassingWeatherCriteria(monthlyStats) {
+  const passing = [];
+  MONTH_ABBR.forEach(m => {
+    const s = monthlyStats[m];
+    if (!s || s.high == null || s.low == null || s.rainIn == null) return;
+    const minHigh = COOL_SEASON_MONTHS.includes(m) ? 55 : 60;
+    const tempOk = s.high >= minHigh && s.high <= 80;
+    const frostOk = s.low > 32;
+    const rainOk = s.rainIn <= 2.5;
+    if (tempOk && frostOk && rainOk) passing.push(m);
+  });
+  return passing;
+}
+
+async function fetchClimateBestMonths(pinId, lat, lng) {
+  const cached = CLIMATE_CACHE[pinId];
+  if (cached && (Date.now() - cached.fetchedAt) < CLIMATE_TTL_MS) return cached.months;
+
+  const url = 'https://archive-api.open-meteo.com/v1/archive?latitude=' + lat + '&longitude=' + lng +
+    '&start_date=2015-01-01&end_date=2024-12-31&daily=temperature_2m_max,temperature_2m_min,precipitation_sum' +
+    '&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto';
+  const resp = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(20000) : undefined });
+  if (!resp.ok) throw new Error('Open-Meteo error ' + resp.status);
+  const data = await resp.json();
+  const days = data.daily;
+  if (!days || !days.time) throw new Error('No climate data returned');
+
+  const byMonth = {};
+  MONTH_ABBR.forEach(m => byMonth[m] = { highs: [], lows: [], rainByYearMonth: {} });
+  for (let i = 0; i < days.time.length; i++) {
+    const parts = days.time[i].split('-'); // YYYY-MM-DD
+    const m = MONTH_ABBR[parseInt(parts[1], 10) - 1];
+    const hi = days.temperature_2m_max[i], lo = days.temperature_2m_min[i], rain = days.precipitation_sum[i];
+    if (hi != null) byMonth[m].highs.push(hi);
+    if (lo != null) byMonth[m].lows.push(lo);
+    if (rain != null) {
+      const key = parts[0] + '-' + parts[1];
+      byMonth[m].rainByYearMonth[key] = (byMonth[m].rainByYearMonth[key] || 0) + rain;
+    }
+  }
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  const monthlyStats = {};
+  MONTH_ABBR.forEach(m => {
+    monthlyStats[m] = {
+      high: avg(byMonth[m].highs),
+      low: avg(byMonth[m].lows),
+      rainIn: avg(Object.values(byMonth[m].rainByYearMonth))
+    };
+  });
+
+  const months = monthsPassingWeatherCriteria(monthlyStats);
+  CLIMATE_CACHE[pinId] = { fetchedAt: Date.now(), months: months };
+  saveClimateCache(CLIMATE_CACHE);
+  return months;
+}
+
+// One-time (per browser, ~180 days) background pass so pins outside the 58 curated areas
+// get their live climate-based best-months WITHOUT Laura having to open each one individually
+// — otherwise the "Best Month" sidebar/Nearby filters would silently miss them. Paced with a
+// gap between requests so it never hammers Open-Meteo or the browser.
+function prefetchClimateData() {
+  const queue = allPins().filter(pin => {
+    const p = effectivePin(pin);
+    if (p.lat == null || p.lng == null) return false;
+    if (p.best_months && p.best_months.length) return false;
+    if (p.area && AREAS[p.area] && AREAS[p.area].months_that_pass) return false;
+    const cached = CLIMATE_CACHE[p.id];
+    return !(cached && (Date.now() - cached.fetchedAt) < CLIMATE_TTL_MS);
+  });
+  if (!queue.length) return;
+  const total = queue.length;
+  const statusEl = document.getElementById('climate-prefetch-status');
+  let i = 0, sinceRefresh = 0;
+  function updateStatus() {
+    if (!statusEl) return;
+    statusEl.style.display = '';
+    statusEl.textContent = 'Checking climate data for ' + (total - i) + ' more pin' + (total - i === 1 ? '' : 's') + ' in the background…';
+  }
+  function step() {
+    if (i >= total) {
+      if (statusEl) statusEl.style.display = 'none';
+      applyFilters();
+      return;
+    }
+    updateStatus();
+    const p = effectivePin(queue[i]);
+    i++;
+    fetchClimateBestMonths(p.id, p.lat, p.lng).catch(() => {}).then(() => {
+      sinceRefresh++;
+      if (sinceRefresh >= 15) { sinceRefresh = 0; applyFilters(); }
+      setTimeout(step, 350);
+    });
+  }
+  setTimeout(step, 2000); // let the initial map/list render first
+}
+
 function allPins() { return PINS.concat(CUSTOM_PINS); }
 
 function getPin(id) { return allPins().find(p => p.id === id); }
@@ -175,17 +289,20 @@ const filters = {
   month: ''
 };
 
-function getBestMonths(p) {
-  if (p.best_seasons && p.best_seasons.length) {
-    const months = new Set();
-    p.best_seasons.forEach(s => (SEASON_MONTHS[s] || []).forEach(m => months.add(m)));
-    return Array.from(months);
-  }
+function bestMonthsState(p) {
+  // 1. A manual override (set via the Edit form) wins outright.
+  if (p.best_months && p.best_months.length) return { months: p.best_months, pending: false };
+  // 2. One of the 58 curated areas from Laura's spreadsheet — precise month-level data.
   if (p.area && AREAS[p.area] && AREAS[p.area].months_that_pass) {
-    return AREAS[p.area].months_that_pass;
+    return { months: AREAS[p.area].months_that_pass, pending: false };
   }
-  return null;
+  // 3. Anywhere else: live-computed from climate history against her 3 weather criteria,
+  // once fetchClimateBestMonths() has resolved and cached it (see openDetail).
+  const cached = CLIMATE_CACHE[p.id];
+  if (cached) return { months: cached.months, pending: false };
+  return { months: [], pending: true };
 }
+function getBestMonths(p) { return bestMonthsState(p).months; }
 
 function passesFilters(pin) {
   const p = effectivePin(pin);
@@ -326,8 +443,15 @@ function applyFilters() {
 }
 
 // ---------- Detail / edit panel ----------
+function bestMonthsDisplayHtml(p) {
+  const state = bestMonthsState(p);
+  if (state.months.length) return state.months.join(', ');
+  if (state.pending) return 'Checking typical climate for this spot&hellip;';
+  return 'No months meet the mild-weather criteria here (60&ndash;80&deg;F days, no frost, &le;2.5&Prime; rain &mdash; relaxed to 55&deg;F Nov&ndash;Mar).';
+}
+
 function buildDetailHtml(p) {
-  const bestMonths = getBestMonths(p) || [];
+  const bestMonths = getBestMonths(p);
   const rows = [];
 
   rows.push('<h2>' + escapeHtml(p.name) + '</h2>');
@@ -348,7 +472,7 @@ function buildDetailHtml(p) {
     (p.driving_miles_from_pleasanton != null
       ? Math.round(p.driving_miles_from_pleasanton) + ' mi' + (p.driving_minutes_from_pleasanton != null ? ' (~' + Math.round(p.driving_minutes_from_pleasanton / 6) / 10 + ' hr drive)' : '')
       : 'Not computed (likely over 400mi)') + '</div></div>');
-  if (bestMonths.length) rows.push('<div class="field-row"><label>Best months</label><div class="field-static">' + bestMonths.join(', ') + '</div></div>');
+  rows.push('<div class="field-row"><label>Best months</label><div id="best-months-box" class="field-static">' + bestMonthsDisplayHtml(p) + '</div></div>');
   if (p.category === 'Camping') rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><div id="nearby-towns-box" class="field-static">' + townsDisplay + '</div></div>');
   if (p.park_type) rows.push('<div class="field-row"><label>Park type</label><div class="field-static">' + escapeHtml(p.park_type) + '</div></div>');
   if (p.reservation_timing) rows.push('<div class="field-row"><label>Reservation timing</label><div class="field-static">' + escapeHtml(p.reservation_timing) + '</div></div>');
@@ -362,8 +486,11 @@ function buildDetailHtml(p) {
   rows.push('</div>');
 
   // ---- Edit form (hidden until "Edit" is clicked) ----
-  const seasonChecks = ['Spring', 'Summer', 'Fall', 'Winter'].map(s =>
-    '<label class="checkbox-row"><input type="checkbox" id="edit-season-' + s.toLowerCase() + '" ' + ((p.best_seasons || []).includes(s) ? 'checked' : '') + '> ' + s + '</label>'
+  // Pre-check using the current EFFECTIVE best months (area/climate-derived if no manual
+  // override exists yet) so Laura starts from a sensible baseline and can tweak from there.
+  const currentBestMonths = bestMonths;
+  const monthChecks = MONTH_ABBR.map(m =>
+    '<label class="checkbox-row" style="display:inline-flex;width:31%;box-sizing:border-box;"><input type="checkbox" id="edit-month-' + m.toLowerCase() + '" ' + (currentBestMonths.includes(m) ? 'checked' : '') + '> ' + m + '</label>'
   ).join('');
 
   rows.push('<div id="detail-edit-form" class="hidden">');
@@ -374,7 +501,8 @@ function buildDetailHtml(p) {
   rows.push('<div class="field-row"><label>State</label><input type="text" id="edit-state" value="' + escapeHtml(p.state || '') + '"></div>');
   rows.push('<div class="field-row"><label>Area</label><input type="text" id="edit-area" value="' + escapeHtml(p.area || '') + '" placeholder="e.g. Big Sur Coast"></div>');
   rows.push('<div class="field-row"><label>Distance from Pleasanton (driving miles)</label><input type="number" id="edit-distance-miles" min="0" value="' + (p.driving_miles_from_pleasanton != null ? p.driving_miles_from_pleasanton : '') + '"></div>');
-  rows.push('<div class="field-row"><label>Best months (by season)</label>' + seasonChecks + '</div>');
+  rows.push('<div class="field-row"><label>Best months</label><div style="display:flex;flex-wrap:wrap;gap:4px 2%;">' + monthChecks + '</div>' +
+    '<small class="hint">Pre-filled from the area\'s climate data (or a live weather check) where available &mdash; check/uncheck any month to override.</small></div>');
   if (p.category === 'Camping') rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><input type="text" id="edit-towns-override" value="' + escapeHtml(townsOverride) + '" placeholder="Leave blank to auto-detect, or type your own list"></div>');
   rows.push('<div class="field-row"><label>Park type</label><input type="text" id="edit-park-type" value="' + escapeHtml(p.park_type || '') + '"></div>');
   rows.push('<div class="field-row"><label>Reservation timing</label><input type="text" id="edit-reservation-timing" value="' + escapeHtml(p.reservation_timing || '') + '" placeholder="e.g. 6 months in advance, first-come first-served"></div>');
@@ -478,12 +606,13 @@ function wireDetailEvents(p) {
     const distVal = document.getElementById('edit-distance-miles').value;
     fields.driving_miles_from_pleasanton = distVal === '' ? null : parseFloat(distVal);
     fields.driving_minutes_from_pleasanton = null; // unknown after a manual mileage edit
-    const seasons = [];
-    ['spring', 'summer', 'fall', 'winter'].forEach(s => {
-      const cb = document.getElementById('edit-season-' + s);
-      if (cb && cb.checked) seasons.push(s.charAt(0).toUpperCase() + s.slice(1));
+    const months = [];
+    MONTH_ABBR.forEach(m => {
+      const cb = document.getElementById('edit-month-' + m.toLowerCase());
+      if (cb && cb.checked) months.push(m);
     });
-    fields.best_seasons = seasons.length ? seasons : null;
+    fields.best_months = months.length ? months : null;
+    fields.best_seasons = null; // clear out any legacy season-level override
     const townsOverrideInput = document.getElementById('edit-towns-override');
     if (townsOverrideInput) fields.nearby_towns_override = townsOverrideInput.value.trim() || null;
     fields.park_type = document.getElementById('edit-park-type').value.trim() || null;
@@ -585,6 +714,16 @@ function openDetail(id) {
       if (box && !NEARBY_TOWNS_CACHE[p.id]) {
         box.innerHTML = (p.nearest_town_name ? escapeHtml(p.nearest_town_name) + ' (' + p.nearest_town_miles + ' mi)' : 'Unavailable right now') + ' <span class="hint" style="display:inline;">— couldn\'t reach the map service for a fuller list (offline?)</span>';
       }
+    });
+  }
+
+  if (bestMonthsState(p).pending && p.lat != null && p.lng != null) {
+    fetchClimateBestMonths(p.id, p.lat, p.lng).then(() => {
+      const box = document.getElementById('best-months-box');
+      if (box) box.innerHTML = bestMonthsDisplayHtml(p);
+    }).catch(() => {
+      const box = document.getElementById('best-months-box');
+      if (box) box.innerHTML = 'Couldn&rsquo;t check climate for this location right now (offline?). Click Edit to set months manually.';
     });
   }
 }
@@ -1478,6 +1617,7 @@ function init() {
   });
 
   applyFilters();
+  prefetchClimateData();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('service-worker.js').catch(() => {});
