@@ -353,6 +353,57 @@ html, body {
 .trip-site-group[open] summary::before { content: '▾ '; }
 .trip-site-group .list-card { margin-top: 6px; }
 
+.trip-calendar-month { margin-bottom: 18px; }
+.trip-calendar-month h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--green);
+}
+.trip-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+.trip-calendar-dow {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brown);
+  text-align: center;
+  padding: 2px 0;
+}
+.trip-calendar-day {
+  min-height: 56px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px;
+  background: white;
+  overflow: hidden;
+}
+.trip-calendar-day-blank { background: transparent; border: none; }
+.trip-calendar-daynum {
+  font-size: 11px;
+  color: #9a9083;
+  margin-bottom: 2px;
+}
+.trip-calendar-chip {
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 1px 4px;
+  border-radius: 4px;
+  margin-bottom: 2px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trip-calendar-chip-stop { background: #dcece0; color: var(--green); font-weight: 600; }
+.trip-calendar-chip-site { background: #f3e3d3; color: #8b5a2b; }
+
+@media (max-width: 500px) {
+  .trip-calendar-day { min-height: 44px; }
+  .trip-calendar-chip { font-size: 9px; }
+}
+
 .leaflet-popup-content { font-size: 13px; }
 .leaflet-popup-content b { font-size: 14px; }
 

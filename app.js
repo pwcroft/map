@@ -13,7 +13,7 @@ const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep
 const COOL_SEASON_MONTHS = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 
 const CATEGORY_ORDER = ['Camping', 'Things To Do', 'Food & Drink'];
-const CAMPING_SUBCATS = ['Public', 'Private', 'Boondocking'];
+const CAMPING_SUBCATS = ['Public', 'Private', 'Boondocking', 'Harvest Host'];
 const THINGSTODO_SUBCATS = ['State / Nat Parks', 'Points of Interest', 'Hikes', 'Scenic Drives', 'Sites', 'Hot Springs', 'Swim Area', 'Adventures'];
 const FOODDRINK_SUBCATS = ['Food', 'Drinks'];
 
@@ -34,7 +34,7 @@ const CATEGORY_COLORS = {
 // you the type within it.
 const CATEGORY_FALLBACK_ICON = { 'Camping': '⛺', 'Things To Do': '📍', 'Food & Drink': '🍽️' };
 const TYPE_ICONS = {
-  'Camping': { 'Public': '⛺', 'Private': '🚐', 'Boondocking': '🌲' },
+  'Camping': { 'Public': '⛺', 'Private': '🚐', 'Boondocking': '🌲', 'Harvest Host': '🚜' },
   'Things To Do': {
     'State / Nat Parks': '🌲',
     'Points of Interest': '📍',
@@ -583,7 +583,10 @@ function renderList(pins) {
 // ---------- Apply filters / render ----------
 function applyFilters() {
   updateSubfilterSectionVisibility();
-  const all = allPins();
+  // Synthetic hike-ref pins (mirrored from a campground's nearby-hikes list so they can be
+  // added as trip activities) sit at the same coordinates as their campground and don't
+  // belong in the main browse/search experience — they're reached from the trip planner only.
+  const all = allPins().filter(p => !p.is_hike_ref);
   const filtered = all.filter(passesFilters);
   document.getElementById('result-count').textContent = filtered.length + ' of ' + all.length + ' shown';
   if (currentView === 'map') renderMap(filtered);
@@ -1129,6 +1132,17 @@ function migrateTripsIfNeeded() {
         option.sites = sites;
         changed = true;
       }
+      // A campground stay is an arrival/departure range, not one date (so it can show
+      // properly on the calendar view) — split any older single `date` field into
+      // startDate/endDate (same day, if that's all we had).
+      option.stops.forEach(s => {
+        if (s.startDate === undefined) {
+          s.startDate = s.date || null;
+          s.endDate = s.date || null;
+          delete s.date;
+          changed = true;
+        }
+      });
     });
   });
   if (changed) saveTrips(TRIPS);
@@ -1262,6 +1276,7 @@ function renderTripDetail() {
   document.getElementById('trip-stop-search-results').innerHTML = '';
 
   if (tripViewMode === 'map') renderTripMap(option);
+  else if (tripViewMode === 'calendar') renderTripCalendar(option);
 }
 
 function addStopToOption(option, pinId, date) {
@@ -1269,7 +1284,7 @@ function addStopToOption(option, pinId, date) {
   const isCamp = pin && effectivePin(pin).category === 'Camping';
   if (!option.sites) option.sites = [];
   if (isCamp) {
-    option.stops.push({ id: genId('stop'), pinId: pinId, date: date || null, notes: '' });
+    option.stops.push({ id: genId('stop'), pinId: pinId, startDate: date || null, endDate: date || null, notes: '' });
   } else {
     option.sites.push({ id: genId('site'), pinId: pinId, date: date || null, notes: '', assoc: null });
   }
@@ -1283,7 +1298,8 @@ function buildSiteAssocOptions(option, site) {
   const campOptions = option.stops.map(s => {
     const pin = getPin(s.pinId);
     const p = pin ? effectivePin(pin) : null;
-    return { stopId: s.id, label: (p ? p.name : '(removed pin)') + (s.date ? ' (' + s.date + ')' : '') };
+    const range = s.startDate ? ' (' + s.startDate + (s.endDate && s.endDate !== s.startDate ? '–' + s.endDate : '') + ')' : '';
+    return { stopId: s.id, label: (p ? p.name : '(removed pin)') + range };
   });
   const driveDayOptions = [];
   for (let i = 0; i < option.stops.length - 1; i++) {
@@ -1330,7 +1346,7 @@ function renderTripSiteCard(option, site) {
     '</div>' +
     '<div class="hint" data-act="distance" style="margin:2px 0 0;"></div>' +
     '<div class="price-row" style="margin-top:6px;">' +
-      '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Date:</label>' +
+      '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Day:</label>' +
       '<input type="date" data-act="date" value="' + (site.date || '') + '">' +
     '</div>';
 
@@ -1339,7 +1355,17 @@ function renderTripSiteCard(option, site) {
     saveTrips(TRIPS);
     renderTripDetail();
   });
-  card.querySelector('[data-act="date"]').addEventListener('change', e => { site.date = e.target.value || null; saveTrips(TRIPS); });
+  card.querySelector('[data-act="date"]').addEventListener('change', e => {
+    site.date = e.target.value || null;
+    saveTrips(TRIPS);
+    if (tripViewMode === 'calendar') renderTripCalendar(option);
+  });
+  if (pin) {
+    const mainEl = card.querySelector('.list-card-main');
+    mainEl.style.cursor = 'pointer';
+    mainEl.title = 'View pin details';
+    mainEl.addEventListener('click', () => { closeTripsTool(); openDetail(pin.id); });
+  }
   card.querySelector('[data-act="assoc"]').addEventListener('change', e => {
     const val = e.target.value;
     if (!val) {
@@ -1377,6 +1403,83 @@ function renderTripSiteGroup(container, key, label, groupSites, option) {
   container.appendChild(details);
 }
 
+// Nearby hikes live only as entries inside a campground pin's nearby_alltrails_hikes
+// array (no coordinates or id of their own) — to let one be added as a trip activity
+// tied to that campground, we mirror it into a small synthetic custom pin the very
+// first time it's added (reused after that, keyed off the campground + hike name), so
+// it can ride along on every existing site mechanism: nested cards, map markers,
+// click-through to a detail panel, distance calcs. It's flagged is_hike_ref so it stays
+// out of the main map/list/search and out of the generic trip "add a stop" search —
+// the only way to add one is the picker below, right on the campground it belongs to.
+function findOrCreateHikePin(campPin, hike) {
+  const slug = hike.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '') || 'hike';
+  const hikeId = 'hikepin_' + campPin.id + '_' + slug;
+  let existing = CUSTOM_PINS.find(cp => cp.id === hikeId);
+  if (!existing) {
+    const metaBits = [];
+    if (hike.difficulty) metaBits.push(hike.difficulty);
+    if (hike.length_miles != null) metaBits.push(hike.length_miles + ' mi');
+    if (hike.route_type) metaBits.push(hike.route_type);
+    existing = {
+      id: hikeId,
+      name: hike.name,
+      category: 'Things To Do',
+      subcategory: 'Hikes',
+      lat: campPin.lat,
+      lng: campPin.lng,
+      state: campPin.state || null,
+      area: campPin.area || null,
+      driving_miles_from_pleasanton: campPin.driving_miles_from_pleasanton != null ? campPin.driving_miles_from_pleasanton : null,
+      driving_minutes_from_pleasanton: campPin.driving_minutes_from_pleasanton != null ? campPin.driving_minutes_from_pleasanton : null,
+      url: hike.url || null,
+      notes: 'Nearby hike near ' + campPin.name + (metaBits.length ? ' — ' + metaBits.join(' · ') : ''),
+      is_custom: true,
+      is_hike_ref: true,
+      hike_source_pin_id: campPin.id
+    };
+    CUSTOM_PINS.push(existing);
+    saveCustomPins(CUSTOM_PINS);
+  }
+  return existing;
+}
+
+// Adds a "+ Add a nearby hike as an activity..." picker under a campground's trip card,
+// listing its nearby_alltrails_hikes (minus any already added to this stop).
+function appendHikePicker(card, option, stop, campP) {
+  const hikes = campP.nearby_alltrails_hikes || [];
+  if (!hikes.length) return;
+  const alreadyAdded = new Set(
+    (option.sites || [])
+      .filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id)
+      .map(s => { const sp = getPin(s.pinId); return sp && sp.is_hike_ref ? sp.name : null; })
+      .filter(Boolean)
+  );
+  const available = hikes.filter(h => !alreadyAdded.has(h.name));
+  const row = document.createElement('div');
+  row.className = 'field-row';
+  row.style.margin = '6px 0 0';
+  if (!available.length) {
+    row.innerHTML = '<div class="hint">All nearby hikes from this pin are already added as activities here.</div>';
+    card.appendChild(row);
+    return;
+  }
+  const select = document.createElement('select');
+  select.innerHTML = '<option value="">+ Add a nearby hike as an activity...</option>' +
+    available.map(h => '<option value="' + escapeHtml(h.name) + '">' + escapeHtml(h.name) + '</option>').join('');
+  select.addEventListener('change', () => {
+    if (!select.value) return;
+    const hike = hikes.find(h => h.name === select.value);
+    if (!hike) return;
+    const hikePin = findOrCreateHikePin(campP, hike);
+    if (!option.sites) option.sites = [];
+    option.sites.push({ id: genId('site'), pinId: hikePin.id, date: null, notes: '', assoc: { type: 'campground', stopId: stop.id } });
+    saveTrips(TRIPS);
+    renderTripDetail();
+  });
+  row.appendChild(select);
+  card.appendChild(row);
+}
+
 // Campgrounds, each followed immediately by the sites/activities tied to it, then any
 // sites tied to the drive day before the next campground — so the whole trip reads
 // top-to-bottom in the order you'll actually experience it.
@@ -1408,15 +1511,38 @@ function renderTripCampgrounds(option) {
           '<button data-act="remove" type="button" title="Remove" style="color:#b5493b;">&times;</button>' +
         '</div>' +
       '</div>' +
-      '<div class="price-row" style="margin-top:6px;">' +
-        '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Date:</label>' +
-        '<input type="date" data-act="date" value="' + (stop.date || '') + '">' +
+      '<div class="price-row" style="margin-top:6px;flex-wrap:wrap;">' +
+        '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Arrival:</label>' +
+        '<input type="date" data-act="start-date" value="' + (stop.startDate || '') + '">' +
+        '<label style="align-self:center;font-size:12px;color:var(--brown);margin:0 4px 0 8px;">Departure:</label>' +
+        '<input type="date" data-act="end-date" value="' + (stop.endDate || '') + '">' +
       '</div>';
     card.querySelector('[data-act="up"]').addEventListener('click', () => moveStop(option, i, -1));
     card.querySelector('[data-act="down"]').addEventListener('click', () => moveStop(option, i, 1));
     card.querySelector('[data-act="remove"]').addEventListener('click', () => removeStop(option, i));
-    card.querySelector('[data-act="date"]').addEventListener('change', e => { stop.date = e.target.value || null; saveTrips(TRIPS); });
+    card.querySelector('[data-act="start-date"]').addEventListener('change', e => {
+      stop.startDate = e.target.value || null;
+      if (stop.startDate && stop.endDate && stop.endDate < stop.startDate) stop.endDate = stop.startDate;
+      saveTrips(TRIPS);
+      if (tripViewMode === 'calendar') renderTripCalendar(option);
+    });
+    card.querySelector('[data-act="end-date"]').addEventListener('change', e => {
+      stop.endDate = e.target.value || null;
+      if (stop.endDate && stop.startDate && stop.endDate < stop.startDate) stop.startDate = stop.endDate;
+      saveTrips(TRIPS);
+      if (tripViewMode === 'calendar') renderTripCalendar(option);
+    });
+    if (pin) {
+      const mainEl = card.querySelector('.list-card-main');
+      mainEl.style.cursor = 'pointer';
+      mainEl.title = 'View pin details';
+      mainEl.addEventListener('click', () => { closeTripsTool(); openDetail(pin.id); });
+    }
     container.appendChild(card);
+
+    if (p && (p.nearby_alltrails_hikes || []).length) {
+      appendHikePicker(card, option, stop, p);
+    }
 
     const hereSites = sites.filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id);
     renderTripSiteGroup(container, 'camp:' + stop.id, 'Sites & activities here', hereSites, option);
@@ -1527,12 +1653,139 @@ function setTripViewMode(mode) {
   tripViewMode = mode;
   document.getElementById('trip-view-list').classList.toggle('active', mode === 'list');
   document.getElementById('trip-view-map').classList.toggle('active', mode === 'map');
+  document.getElementById('trip-view-calendar').classList.toggle('active', mode === 'calendar');
   document.getElementById('trip-list-mode').classList.toggle('hidden', mode !== 'list');
   document.getElementById('trip-map').classList.toggle('hidden', mode !== 'map');
+  document.getElementById('trip-calendar').classList.toggle('hidden', mode !== 'calendar');
   if (mode === 'map') {
     const option = getActiveOption();
     if (option) setTimeout(() => renderTripMap(option), 50);
+  } else if (mode === 'calendar') {
+    const option = getActiveOption();
+    if (option) renderTripCalendar(option);
   }
+}
+
+// ---- Trip calendar view: a month grid per month the trip spans, with each campground's
+// arrival→departure stay shown on every day it covers, and each dated activity/hike
+// shown as a chip on its one day — so "does this all fit together" is readable at a glance.
+function getOptionDateRange(option) {
+  const dates = [];
+  (option.stops || []).forEach(s => { if (s.startDate) dates.push(s.startDate); if (s.endDate) dates.push(s.endDate); });
+  (option.sites || []).forEach(s => { if (s.date) dates.push(s.date); });
+  if (!dates.length) return null;
+  dates.sort();
+  return { min: dates[0], max: dates[dates.length - 1] };
+}
+
+function addDaysToDateStr(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function renderTripCalendar(option) {
+  const container = document.getElementById('trip-calendar');
+  container.innerHTML = '';
+  const range = getOptionDateRange(option);
+  if (!range) {
+    container.innerHTML = '<div class="field-static">Add an arrival date to a campground (or a day to an activity/hike) to see this trip on a calendar.</div>';
+    return;
+  }
+
+  const dayMap = {}; // 'YYYY-MM-DD' -> { stops: [...], sites: [...] }
+  const ensureDay = d => { if (!dayMap[d]) dayMap[d] = { stops: [], sites: [] }; return dayMap[d]; };
+
+  (option.stops || []).forEach(stop => {
+    if (!stop.startDate) return;
+    const pin = getPin(stop.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    const name = p ? p.name : '(removed pin)';
+    const start = stop.startDate;
+    const end = stop.endDate && stop.endDate >= start ? stop.endDate : start;
+    let cursor = start;
+    let guard = 0;
+    while (cursor <= end && guard < 90) { // safety cap: no single stay renders more than ~3 months
+      ensureDay(cursor).stops.push({ name: name, isStart: cursor === start, isEnd: cursor === end, pinId: pin ? stop.pinId : null });
+      if (cursor === end) break;
+      cursor = addDaysToDateStr(cursor, 1);
+      guard++;
+    }
+  });
+  (option.sites || []).forEach(site => {
+    if (!site.date) return;
+    const pin = getPin(site.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    ensureDay(site.date).sites.push({ name: p ? p.name : '(removed pin)', pinId: pin ? site.pinId : null });
+  });
+
+  let cursorMonth = range.min.slice(0, 7);
+  const endMonth = range.max.slice(0, 7);
+  let guard = 0;
+  while (cursorMonth <= endMonth && guard < 24) { // safety cap: at most 2 years of months
+    container.appendChild(buildTripCalendarMonth(cursorMonth, dayMap));
+    const [y, m] = cursorMonth.split('-').map(Number);
+    const next = new Date(y, m, 1); // m is 1-indexed, so this already rolls to next month
+    cursorMonth = next.getFullYear() + '-' + String(next.getMonth() + 1).padStart(2, '0');
+    guard++;
+  }
+}
+
+function buildTripCalendarMonth(monthKeyStr, dayMap) {
+  const [year, month] = monthKeyStr.split('-').map(Number); // month is 1-indexed
+  const wrap = document.createElement('div');
+  wrap.className = 'trip-calendar-month';
+  const heading = document.createElement('h4');
+  heading.textContent = new Date(year, month - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  wrap.appendChild(heading);
+
+  const grid = document.createElement('div');
+  grid.className = 'trip-calendar-grid';
+  ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(d => {
+    const h = document.createElement('div');
+    h.className = 'trip-calendar-dow';
+    h.textContent = d;
+    grid.appendChild(h);
+  });
+
+  const startWeekday = new Date(year, month - 1, 1).getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  for (let i = 0; i < startWeekday; i++) {
+    const blank = document.createElement('div');
+    blank.className = 'trip-calendar-day trip-calendar-day-blank';
+    grid.appendChild(blank);
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+    const cell = document.createElement('div');
+    cell.className = 'trip-calendar-day';
+    const num = document.createElement('div');
+    num.className = 'trip-calendar-daynum';
+    num.textContent = day;
+    cell.appendChild(num);
+    const info = dayMap[dateStr];
+    if (info) {
+      info.stops.forEach(s => {
+        const chip = document.createElement('div');
+        chip.className = 'trip-calendar-chip trip-calendar-chip-stop';
+        chip.textContent = (s.isStart ? '→ ' : '') + s.name + (s.isEnd && !s.isStart ? ' →' : '');
+        chip.title = s.name;
+        if (s.pinId) chip.addEventListener('click', () => { closeTripsTool(); openDetail(s.pinId); });
+        cell.appendChild(chip);
+      });
+      info.sites.forEach(s => {
+        const chip = document.createElement('div');
+        chip.className = 'trip-calendar-chip trip-calendar-chip-site';
+        chip.textContent = s.name;
+        chip.title = s.name;
+        if (s.pinId) chip.addEventListener('click', () => { closeTripsTool(); openDetail(s.pinId); });
+        cell.appendChild(chip);
+      });
+    }
+    grid.appendChild(cell);
+  }
+  wrap.appendChild(grid);
+  return wrap;
 }
 
 function initOrResetTripMap(centerLat, centerLng, zoom) {
@@ -1554,13 +1807,13 @@ function renderTripMap(option) {
     const pin = getPin(s.pinId);
     if (!pin) return null;
     const p = effectivePin(pin);
-    return p.lat != null ? { p: p, seq: i + 1 } : null;
+    return p.lat != null ? { p: p, seq: i + 1, stopId: s.id } : null;
   }).filter(Boolean);
   const siteEntries = (option.sites || []).map(s => {
     const pin = getPin(s.pinId);
     if (!pin) return null;
     const p = effectivePin(pin);
-    return p.lat != null ? { p: p } : null;
+    return p.lat != null ? { p: p, site: s } : null;
   }).filter(Boolean);
 
   const center = campEntries[0] || siteEntries[0];
@@ -1568,9 +1821,25 @@ function renderTripMap(option) {
   tripMarkersLayer.clearLayers();
   tripLineLayer.clearLayers();
 
-  const campLatLngs = campEntries.map(e => [e.p.lat, e.p.lng]);
-  if (campLatLngs.length > 1) {
-    L.polyline(campLatLngs, { color: '#2f5233', weight: 3, dashArray: '6,6', opacity: 0.7 }).addTo(tripLineLayer);
+  // One continuous route line: each campground in order, with any sites tied to the
+  // drive day right after it (e.g. Horseshoe Bend between Watchman and Mather) spliced
+  // in between — ordered by straight-line distance from the campground being left, as
+  // a stand-in for the order you'd actually pass them on the drive.
+  const routeLatLngs = [];
+  campEntries.forEach((entry, i) => {
+    routeLatLngs.push([entry.p.lat, entry.p.lng]);
+    if (i < campEntries.length - 1) {
+      const nextEntry = campEntries[i + 1];
+      const driveSites = siteEntries.filter(se => se.site.assoc && se.site.assoc.type === 'driveday' &&
+        se.site.assoc.fromStopId === entry.stopId && se.site.assoc.toStopId === nextEntry.stopId);
+      driveSites
+        .slice()
+        .sort((a, b) => haversineMiles(entry.p.lat, entry.p.lng, a.p.lat, a.p.lng) - haversineMiles(entry.p.lat, entry.p.lng, b.p.lat, b.p.lng))
+        .forEach(se => routeLatLngs.push([se.p.lat, se.p.lng]));
+    }
+  });
+  if (routeLatLngs.length > 1) {
+    L.polyline(routeLatLngs, { color: '#2f5233', weight: 3, dashArray: '6,6', opacity: 0.7 }).addTo(tripLineLayer);
   }
 
   const bounds = [];
@@ -1621,7 +1890,7 @@ function runTripStopSearch(q) {
   resultsEl.innerHTML = '';
   if (!q || q.trim().length < 2) return;
   const ql = q.toLowerCase();
-  const matches = allPins().map(effectivePin).filter(p => p.name.toLowerCase().indexOf(ql) !== -1).slice(0, 15);
+  const matches = allPins().map(effectivePin).filter(p => !p.is_hike_ref && p.name.toLowerCase().indexOf(ql) !== -1).slice(0, 15);
   if (!matches.length) {
     resultsEl.innerHTML = '<div class="field-static">No matches.</div>';
     return;
@@ -2100,6 +2369,7 @@ function init() {
   document.getElementById('trip-stop-search').addEventListener('input', e => runTripStopSearch(e.target.value));
   document.getElementById('trip-view-list').addEventListener('click', () => setTripViewMode('list'));
   document.getElementById('trip-view-map').addEventListener('click', () => setTripViewMode('map'));
+  document.getElementById('trip-view-calendar').addEventListener('click', () => setTripViewMode('calendar'));
 
   document.getElementById('export-btn').addEventListener('click', exportEdits);
   document.getElementById('import-btn').addEventListener('click', () => document.getElementById('import-file').click());
