@@ -1788,6 +1788,155 @@ function buildTripCalendarMonth(monthKeyStr, dayMap) {
   return wrap;
 }
 
+// ---- All-trips calendar (main page): every trip's first/primary option, overlaid on one
+// calendar with a color per trip, so she can see at a glance whether trips overlap or how
+// the year's travel lines up. Reuses the same month-grid renderer as the per-trip calendar.
+const TRIP_COLOR_PALETTE = ['#2f5233', '#8b6f47', '#2a5d8c', '#b5493b', '#6b4c9a', '#1f7a6c', '#a3762a', '#4a4a4a'];
+
+function openAllTripsCalendar() {
+  document.getElementById('calendar-overlay').classList.remove('hidden');
+  renderAllTripsCalendar();
+}
+
+function closeAllTripsCalendar() {
+  document.getElementById('calendar-overlay').classList.add('hidden');
+}
+
+function jumpToTripFromCalendar(tripId) {
+  closeAllTripsCalendar();
+  document.getElementById('trips-overlay').classList.remove('hidden');
+  openTripDetail(tripId);
+}
+
+function renderAllTripsCalendar() {
+  const container = document.getElementById('all-trips-calendar');
+  const legend = document.getElementById('calendar-legend');
+  container.innerHTML = '';
+  legend.innerHTML = '';
+  if (!TRIPS.length) {
+    container.innerHTML = '<div class="field-static">No trips yet — use the Trips button to create one.</div>';
+    return;
+  }
+
+  const dayMap = {}; // 'YYYY-MM-DD' -> [{ tripId, tripName, color, kind, name, pinId, isStart, isEnd }]
+  const ensureDay = d => { if (!dayMap[d]) dayMap[d] = []; return dayMap[d]; };
+  let minDate = null, maxDate = null;
+  const trackDate = d => { if (!minDate || d < minDate) minDate = d; if (!maxDate || d > maxDate) maxDate = d; };
+
+  TRIPS.forEach((trip, idx) => {
+    const option = trip.options && trip.options[0];
+    const color = TRIP_COLOR_PALETTE[idx % TRIP_COLOR_PALETTE.length];
+    let hasDates = false;
+
+    if (option) {
+      (option.stops || []).forEach(stop => {
+        if (!stop.startDate) return;
+        hasDates = true;
+        const pin = getPin(stop.pinId);
+        const p = pin ? effectivePin(pin) : null;
+        const name = p ? p.name : '(removed pin)';
+        const start = stop.startDate;
+        const end = stop.endDate && stop.endDate >= start ? stop.endDate : start;
+        let cursor = start, guard = 0;
+        while (cursor <= end && guard < 90) { // safety cap: no single stay renders more than ~3 months
+          ensureDay(cursor).push({ tripId: trip.id, tripName: trip.name, color: color, kind: 'stop', name: name, pinId: pin ? stop.pinId : null, isStart: cursor === start, isEnd: cursor === end });
+          trackDate(cursor);
+          if (cursor === end) break;
+          cursor = addDaysToDateStr(cursor, 1);
+          guard++;
+        }
+      });
+      (option.sites || []).forEach(site => {
+        if (!site.date) return;
+        hasDates = true;
+        const pin = getPin(site.pinId);
+        const p = pin ? effectivePin(pin) : null;
+        ensureDay(site.date).push({ tripId: trip.id, tripName: trip.name, color: color, kind: 'site', name: p ? p.name : '(removed pin)', pinId: pin ? site.pinId : null });
+        trackDate(site.date);
+      });
+    }
+
+    const legendItem = document.createElement('div');
+    legendItem.className = 'calendar-legend-item';
+    legendItem.innerHTML = '<span class="calendar-legend-swatch" style="background:' + color + ';"></span>' +
+      escapeHtml(trip.name) + (hasDates ? '' : ' <span class="hint" style="display:inline;">(no dates set)</span>');
+    legendItem.style.cursor = 'pointer';
+    legendItem.addEventListener('click', () => jumpToTripFromCalendar(trip.id));
+    legend.appendChild(legendItem);
+  });
+
+  if (!minDate) {
+    container.innerHTML = '<div class="field-static">None of your trips have dates set yet — add an arrival date to a campground (or a day to an activity) in a trip to see it here.</div>';
+    return;
+  }
+
+  let cursorMonth = minDate.slice(0, 7);
+  const endMonth = maxDate.slice(0, 7);
+  let guard = 0;
+  while (cursorMonth <= endMonth && guard < 24) { // safety cap: at most 2 years of months
+    container.appendChild(buildAllTripsCalendarMonth(cursorMonth, dayMap));
+    const [y, m] = cursorMonth.split('-').map(Number);
+    const next = new Date(y, m, 1); // m is 1-indexed, so this already rolls to next month
+    cursorMonth = next.getFullYear() + '-' + String(next.getMonth() + 1).padStart(2, '0');
+    guard++;
+  }
+}
+
+function buildAllTripsCalendarMonth(monthKeyStr, dayMap) {
+  const [year, month] = monthKeyStr.split('-').map(Number); // month is 1-indexed
+  const wrap = document.createElement('div');
+  wrap.className = 'trip-calendar-month';
+  const heading = document.createElement('h4');
+  heading.textContent = new Date(year, month - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  wrap.appendChild(heading);
+
+  const grid = document.createElement('div');
+  grid.className = 'trip-calendar-grid';
+  ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(d => {
+    const h = document.createElement('div');
+    h.className = 'trip-calendar-dow';
+    h.textContent = d;
+    grid.appendChild(h);
+  });
+
+  const startWeekday = new Date(year, month - 1, 1).getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  for (let i = 0; i < startWeekday; i++) {
+    const blank = document.createElement('div');
+    blank.className = 'trip-calendar-day trip-calendar-day-blank';
+    grid.appendChild(blank);
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+    const cell = document.createElement('div');
+    cell.className = 'trip-calendar-day';
+    const num = document.createElement('div');
+    num.className = 'trip-calendar-daynum';
+    num.textContent = day;
+    cell.appendChild(num);
+    const entries = dayMap[dateStr];
+    if (entries) {
+      entries.forEach(entry => {
+        const chip = document.createElement('div');
+        chip.className = 'trip-calendar-chip';
+        chip.style.background = entry.color;
+        chip.style.color = '#fff';
+        const label = entry.kind === 'stop' ? (entry.isStart ? '→ ' : '') + entry.name + (entry.isEnd && !entry.isStart ? ' →' : '') : entry.name;
+        chip.textContent = entry.tripName + ': ' + label;
+        chip.title = entry.tripName + ' — ' + label;
+        chip.addEventListener('click', () => {
+          if (entry.pinId) { closeAllTripsCalendar(); openDetail(entry.pinId); }
+          else { jumpToTripFromCalendar(entry.tripId); }
+        });
+        cell.appendChild(chip);
+      });
+    }
+    grid.appendChild(cell);
+  }
+  wrap.appendChild(grid);
+  return wrap;
+}
+
 function initOrResetTripMap(centerLat, centerLng, zoom) {
   if (!tripMap) {
     tripMap = L.map('trip-map').setView([centerLat, centerLng], zoom);
@@ -2330,6 +2479,10 @@ function init() {
   document.getElementById('trips-tool-btn').addEventListener('click', () => openTripsTool());
   document.getElementById('trips-close').addEventListener('click', closeTripsTool);
   document.getElementById('trips-overlay').addEventListener('click', e => { if (e.target.id === 'trips-overlay') closeTripsTool(); });
+
+  document.getElementById('calendar-tool-btn').addEventListener('click', () => openAllTripsCalendar());
+  document.getElementById('calendar-close').addEventListener('click', closeAllTripsCalendar);
+  document.getElementById('calendar-overlay').addEventListener('click', e => { if (e.target.id === 'calendar-overlay') closeAllTripsCalendar(); });
   document.getElementById('new-trip-btn').addEventListener('click', createTrip);
   document.getElementById('trip-back-btn').addEventListener('click', renderTripsListView);
   document.getElementById('trip-name-input').addEventListener('change', e => {

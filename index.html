@@ -20,6 +20,7 @@
     <button id="view-toggle-list" class="view-btn">List</button>
     <button id="distance-tool-btn" title="Find nearby">&#128205; Nearby</button>
     <button id="trips-tool-btn" title="Plan a trip">&#128203; Trips</button>
+    <button id="calendar-tool-btn" title="See all your trips on one calendar">&#128197; Calendar</button>
     <button id="add-pin-btn" title="Add a new campground or site">+ Add</button>
   </div>
 </header>
@@ -248,6 +249,17 @@
 
       <button id="trip-delete-btn" class="secondary-btn" type="button" style="color:#b5493b;margin-top:16px;">Delete this trip</button>
     </div>
+  </div>
+</div>
+
+<!-- All-trips calendar (main page) -->
+<div id="calendar-overlay" class="hidden">
+  <div id="calendar-panel">
+    <button id="calendar-close" aria-label="Close">&times;</button>
+    <h2>All Trips Calendar</h2>
+    <small class="hint">Shows each trip's first option (its primary plan) &mdash; open a trip to compare alternate options on its own Calendar tab.</small>
+    <div id="calendar-legend"></div>
+    <div id="all-trips-calendar"></div>
   </div>
 </div>
 
