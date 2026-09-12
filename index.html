@@ -226,11 +226,12 @@
       </div>
 
       <div id="trip-list-mode">
-        <h3 class="trip-section-heading">Campgrounds</h3>
+        <h3 class="trip-section-heading">Your Trip</h3>
+        <small class="hint">Sites and activities show nested right under the campground (or drive day) you tie them to — click a group's title to collapse or expand it.</small>
         <div id="trip-stops-list"></div>
 
-        <h3 class="trip-section-heading">Sites &amp; Activities</h3>
-        <small class="hint">Tie each one to a campground you're staying at, or to the drive day between two consecutive campgrounds — its distance is shown from whichever it's tied to.</small>
+        <h3 class="trip-section-heading">Unassigned Sites &amp; Activities</h3>
+        <small class="hint">Newly added sites start here — use the dropdown on each one to tie it to a campground or a drive day above, and it'll move there automatically.</small>
         <div id="trip-sites-list"></div>
 
         <div class="field-row" style="margin-top:10px;">
@@ -276,8 +277,10 @@
     </div>
 
     <div class="field-row"><label>State</label><input type="text" id="add-state" placeholder="e.g. California"></div>
-    <div class="field-row"><label>Price per night ($)</label><input type="number" id="add-price" min="0"></div>
-    <div class="field-row"><label>Hookups</label><input type="text" id="add-hookups" placeholder="e.g. FHU, W&E, Dry"></div>
+    <div id="add-camping-only-fields">
+      <div class="field-row"><label>Price per night ($)</label><input type="number" id="add-price" min="0"></div>
+      <div class="field-row"><label>Hookups</label><input type="text" id="add-hookups" placeholder="e.g. FHU, W&E, Dry"></div>
+    </div>
     <div class="field-row"><label>Website / booking URL</label><input type="text" id="add-url"></div>
     <div class="field-row"><label>Notes</label><textarea id="add-notes"></textarea></div>
 

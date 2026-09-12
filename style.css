@@ -335,6 +335,24 @@ html, body {
   border: 1px solid var(--border);
 }
 
+.trip-site-group {
+  margin: 4px 0 8px 18px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+.trip-site-group summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brown);
+  padding: 4px 0;
+  list-style: none;
+}
+.trip-site-group summary::-webkit-details-marker { display: none; }
+.trip-site-group summary::before { content: '▸ '; }
+.trip-site-group[open] summary::before { content: '▾ '; }
+.trip-site-group .list-card { margin-top: 6px; }
+
 .leaflet-popup-content { font-size: 13px; }
 .leaflet-popup-content b { font-size: 14px; }
 

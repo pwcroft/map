@@ -582,11 +582,29 @@ function renderList(pins) {
 
 // ---------- Apply filters / render ----------
 function applyFilters() {
+  updateSubfilterSectionVisibility();
   const all = allPins();
   const filtered = all.filter(passesFilters);
   document.getElementById('result-count').textContent = filtered.length + ' of ' + all.length + ' shown';
   if (currentView === 'map') renderMap(filtered);
   else renderList(filtered);
+}
+
+// Only show a category's "type" sub-filter section (Camping / Things To Do / Food & Drink)
+// in the sidebar when that category is relevant to what's currently checked above — i.e.
+// no categories checked (showing everything) or that specific category is checked.
+function updateSubfilterSectionVisibility() {
+  const cats = filters.categories;
+  const showAll = cats.size === 0;
+  const sections = [
+    ['camping-subfilter-section', 'Camping'],
+    ['thingstodo-subfilter-section', 'Things To Do'],
+    ['fooddrink-subfilter-section', 'Food & Drink']
+  ];
+  sections.forEach(([id, cat]) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden', !showAll && !cats.has(cat));
+  });
 }
 
 // ---------- Detail / edit panel ----------
@@ -621,12 +639,14 @@ function buildDetailHtml(p) {
       : 'Not computed (likely over 400mi)') + '</div></div>');
   rows.push('<div class="field-row"><label>Best months</label><div id="best-months-box" class="field-static">' + bestMonthsDisplayHtml(p) + '</div></div>');
   if (p.category === 'Camping') rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><div id="nearby-towns-box" class="field-static">' + townsDisplay + '</div></div>');
-  if (p.park_type) rows.push('<div class="field-row"><label>Park type</label><div class="field-static">' + escapeHtml(p.park_type) + '</div></div>');
-  if (p.reservation_timing) rows.push('<div class="field-row"><label>Reservation timing</label><div class="field-static">' + escapeHtml(p.reservation_timing) + '</div></div>');
-  if (maxNightsText) rows.push('<div class="field-row"><label>Max nights</label><div class="field-static">' + escapeHtml(maxNightsText) + '</div></div>');
+  if (p.category === 'Camping' && p.park_type) rows.push('<div class="field-row"><label>Park type</label><div class="field-static">' + escapeHtml(p.park_type) + '</div></div>');
+  if (p.category === 'Camping' && p.reservation_timing) rows.push('<div class="field-row"><label>Reservation timing</label><div class="field-static">' + escapeHtml(p.reservation_timing) + '</div></div>');
+  if (p.category === 'Camping' && maxNightsText) rows.push('<div class="field-row"><label>Max nights</label><div class="field-static">' + escapeHtml(maxNightsText) + '</div></div>');
   rows.push('<div class="field-row"><label>' + (p.is_campground ? 'Visited' : 'Done') + '</label><div class="field-static">' + ((p.is_campground ? p.visited : p.done) ? 'Yes' : 'No') + '</div></div>');
-  rows.push('<div class="field-row"><label>Price per night</label><div class="field-static">' + (p.price_usd != null ? '$' + p.price_usd : '—') + '</div></div>');
-  rows.push('<div class="field-row"><label>Hookups</label><div class="field-static">' + (escapeHtml((p.hookup_types || []).join(', ')) || '—') + '</div></div>');
+  if (p.category === 'Camping') {
+    rows.push('<div class="field-row"><label>Price per night</label><div class="field-static">' + (p.price_usd != null ? '$' + p.price_usd : '—') + '</div></div>');
+    rows.push('<div class="field-row"><label>Hookups</label><div class="field-static">' + (escapeHtml((p.hookup_types || []).join(', ')) || '—') + '</div></div>');
+  }
   rows.push('<div class="field-row"><label>Website / booking URL</label><div class="field-static">' + (p.url ? '<a href="' + escapeHtml(p.url) + '" target="_blank" rel="noopener">' + escapeHtml(p.url) + '</a>' : '—') + '</div></div>');
   rows.push('<div class="field-row"><label>Notes / best sites</label><div class="field-static" style="white-space:pre-wrap;">' + (p.notes ? escapeHtml(p.notes) : '—') + '</div></div>');
   rows.push('<button id="detail-edit-toggle-btn" class="primary-btn" type="button">&#9998; Edit</button>');
@@ -650,23 +670,25 @@ function buildDetailHtml(p) {
   rows.push('<div class="field-row"><label>Distance from Pleasanton (driving miles)</label><input type="number" id="edit-distance-miles" min="0" value="' + (p.driving_miles_from_pleasanton != null ? p.driving_miles_from_pleasanton : '') + '"></div>');
   rows.push('<div class="field-row"><label>Best months</label><div style="display:flex;flex-wrap:wrap;gap:4px 2%;">' + monthChecks + '</div>' +
     '<small class="hint">Pre-filled from the area\'s climate data (or a live weather check) where available &mdash; check/uncheck any month to override.</small></div>');
-  if (p.category === 'Camping') rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><input type="text" id="edit-towns-override" value="' + escapeHtml(townsOverride) + '" placeholder="Leave blank to auto-detect, or type your own list"></div>');
+  rows.push('<div class="toggle-row"><span>' + (p.is_campground ? 'Visited' : 'Done') + '</span>' +
+    '<input type="checkbox" id="detail-status-toggle" ' + ((p.is_campground ? p.visited : p.done) ? 'checked' : '') + '></div>');
+  rows.push('<div id="detail-camping-fields">');
+  rows.push('<div class="field-row"><label>Towns &amp; cities within 10mi</label><input type="text" id="edit-towns-override" value="' + escapeHtml(townsOverride) + '" placeholder="Leave blank to auto-detect, or type your own list"></div>');
   rows.push('<div class="field-row"><label>Park type</label><input type="text" id="edit-park-type" value="' + escapeHtml(p.park_type || '') + '"></div>');
   rows.push('<div class="field-row"><label>Reservation timing</label><input type="text" id="edit-reservation-timing" value="' + escapeHtml(p.reservation_timing || '') + '" placeholder="e.g. 6 months in advance, first-come first-served"></div>');
   rows.push('<div class="field-row"><label>Max nights</label><div class="price-row">' +
     '<input type="number" id="edit-max-nights-stay" min="0" placeholder="per stay" value="' + (p.max_nights_stay != null ? p.max_nights_stay : '') + '">' +
     '<input type="number" id="edit-max-nights-year" min="0" placeholder="per year" value="' + (p.max_nights_year != null ? p.max_nights_year : '') + '">' +
     '</div></div>');
-  rows.push('<div class="toggle-row"><span>' + (p.is_campground ? 'Visited' : 'Done') + '</span>' +
-    '<input type="checkbox" id="detail-status-toggle" ' + ((p.is_campground ? p.visited : p.done) ? 'checked' : '') + '></div>');
   rows.push('<div class="field-row"><label>Price per night ($)</label><input type="number" id="detail-price" min="0" value="' + (p.price_usd != null ? p.price_usd : '') + '"></div>');
   rows.push('<div class="field-row"><label>Hookups</label><input type="text" id="detail-hookups" value="' + escapeHtml((p.hookup_types || []).join(', ')) + '" placeholder="e.g. FHU, W&E, Dry"></div>');
-  rows.push('<div class="field-row"><label>Website / booking URL</label><input type="text" id="detail-url" value="' + escapeHtml(p.url || '') + '"></div>');
   rows.push('<div id="detail-tag-checks">' +
     '<label class="checkbox-row"><input type="checkbox" id="detail-starlink" ' + (p.starlink_friendly ? 'checked' : '') + '> Starlink Friendly</label>' +
     '<label class="checkbox-row"><input type="checkbox" id="detail-hatch" ' + (p.good_for_hatch ? 'checked' : '') + '> Good for Hatch</label>' +
     '<label class="checkbox-row"><input type="checkbox" id="detail-bookable" ' + (p.bookable ? 'checked' : '') + '> Bookable</label>' +
     '</div>');
+  rows.push('</div>');
+  rows.push('<div class="field-row"><label>Website / booking URL</label><input type="text" id="detail-url" value="' + escapeHtml(p.url || '') + '"></div>');
   rows.push('<div class="field-row"><label>Notes / best sites</label><textarea id="detail-notes">' + escapeHtml(p.notes || '') + '</textarea></div>');
   rows.push('<button id="detail-save-btn" class="primary-btn" type="button">Save changes</button>');
   rows.push('<button id="detail-cancel-btn" class="secondary-btn" type="button">Cancel</button>');
@@ -734,10 +756,14 @@ function wireDetailEvents(p) {
   populateSubcatOptions(p.category, 'edit-subcat-row', 'edit-subcategory', false);
   const editSubcatSel = document.getElementById('edit-subcategory');
   if (editSubcatSel && p.subcategory) editSubcatSel.value = p.subcategory;
+  const campingFieldsEl = document.getElementById('detail-camping-fields');
+  const updateCampingFieldsVisibility = cat => { if (campingFieldsEl) campingFieldsEl.classList.toggle('hidden', cat !== 'Camping'); };
+  updateCampingFieldsVisibility(p.category);
   const editCategorySel = document.getElementById('edit-category');
   if (editCategorySel) {
     editCategorySel.addEventListener('change', e => {
       populateSubcatOptions(e.target.value, 'edit-subcat-row', 'edit-subcategory', false);
+      updateCampingFieldsVisibility(e.target.value);
     });
   }
 
@@ -760,23 +786,36 @@ function wireDetailEvents(p) {
     });
     fields.best_months = months.length ? months : null;
     fields.best_seasons = null; // clear out any legacy season-level override
-    const townsOverrideInput = document.getElementById('edit-towns-override');
-    if (townsOverrideInput) fields.nearby_towns_override = townsOverrideInput.value.trim() || null;
-    fields.park_type = document.getElementById('edit-park-type').value.trim() || null;
-    fields.reservation_timing = document.getElementById('edit-reservation-timing').value.trim() || null;
-    const maxStayVal = document.getElementById('edit-max-nights-stay').value;
-    fields.max_nights_stay = maxStayVal === '' ? null : parseFloat(maxStayVal);
-    const maxYearVal = document.getElementById('edit-max-nights-year').value;
-    fields.max_nights_year = maxYearVal === '' ? null : parseFloat(maxYearVal);
-    const priceVal = document.getElementById('detail-price').value;
-    fields.price_usd = priceVal === '' ? null : parseFloat(priceVal);
-    const hookupsRaw = document.getElementById('detail-hookups').value;
-    fields.hookup_types = hookupsRaw.split(',').map(s => s.trim()).filter(Boolean);
+    if (newCategory === 'Camping') {
+      const townsOverrideInput = document.getElementById('edit-towns-override');
+      if (townsOverrideInput) fields.nearby_towns_override = townsOverrideInput.value.trim() || null;
+      fields.park_type = document.getElementById('edit-park-type').value.trim() || null;
+      fields.reservation_timing = document.getElementById('edit-reservation-timing').value.trim() || null;
+      const maxStayVal = document.getElementById('edit-max-nights-stay').value;
+      fields.max_nights_stay = maxStayVal === '' ? null : parseFloat(maxStayVal);
+      const maxYearVal = document.getElementById('edit-max-nights-year').value;
+      fields.max_nights_year = maxYearVal === '' ? null : parseFloat(maxYearVal);
+      const priceVal = document.getElementById('detail-price').value;
+      fields.price_usd = priceVal === '' ? null : parseFloat(priceVal);
+      const hookupsRaw = document.getElementById('detail-hookups').value;
+      fields.hookup_types = hookupsRaw.split(',').map(s => s.trim()).filter(Boolean);
+      fields.starlink_friendly = document.getElementById('detail-starlink').checked;
+      fields.good_for_hatch = document.getElementById('detail-hatch').checked;
+      fields.bookable = document.getElementById('detail-bookable').checked;
+    } else {
+      fields.nearby_towns_override = null;
+      fields.park_type = null;
+      fields.reservation_timing = null;
+      fields.max_nights_stay = null;
+      fields.max_nights_year = null;
+      fields.price_usd = null;
+      fields.hookup_types = [];
+      fields.starlink_friendly = null;
+      fields.good_for_hatch = null;
+      fields.bookable = null;
+    }
     const urlVal = document.getElementById('detail-url').value.trim();
     fields.url = urlVal || null;
-    fields.starlink_friendly = document.getElementById('detail-starlink').checked;
-    fields.good_for_hatch = document.getElementById('detail-hatch').checked;
-    fields.bookable = document.getElementById('detail-bookable').checked;
     fields.notes = document.getElementById('detail-notes').value;
     const statusChecked = document.getElementById('detail-status-toggle').checked;
     if (fields.is_campground) fields.visited = statusChecked; else fields.done = statusChecked;
@@ -1104,6 +1143,10 @@ let tripMap = null;
 let tripMarkersLayer = null;
 let tripLineLayer = null;
 const legCache = {}; // "idA|idB" -> {miles, minutes, estimated}
+// Which nested site groups ("camp:<stopId>" / "drive:<fromId>:<toId>") the user has
+// collapsed in the trip view — persists across re-renders within the session so an
+// unrelated edit (a date, a reorder) doesn't snap a collapsed group back open.
+const collapsedTripGroups = new Set();
 
 function genId(prefix) { return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7); }
 
@@ -1233,6 +1276,110 @@ function addStopToOption(option, pinId, date) {
   saveTrips(TRIPS);
 }
 
+// Builds the <option> list for a site's "tie this to..." dropdown: every campground
+// stop in the trip, plus every consecutive-pair drive day, with the site's current
+// association (if any) pre-selected.
+function buildSiteAssocOptions(option, site) {
+  const campOptions = option.stops.map(s => {
+    const pin = getPin(s.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    return { stopId: s.id, label: (p ? p.name : '(removed pin)') + (s.date ? ' (' + s.date + ')' : '') };
+  });
+  const driveDayOptions = [];
+  for (let i = 0; i < option.stops.length - 1; i++) {
+    const a = option.stops[i], b = option.stops[i + 1];
+    const pa = getPin(a.pinId), pb = getPin(b.pinId);
+    driveDayOptions.push({
+      fromStopId: a.id,
+      toStopId: b.id,
+      label: 'Drive day: ' + (pa ? effectivePin(pa).name : '(removed pin)') + ' → ' + (pb ? effectivePin(pb).name : '(removed pin)')
+    });
+  }
+  return ['<option value="">Not yet assigned</option>']
+    .concat(campOptions.map(o => '<option value="camp:' + o.stopId + '"' +
+      (site.assoc && site.assoc.type === 'campground' && site.assoc.stopId === o.stopId ? ' selected' : '') +
+      '>At: ' + escapeHtml(o.label) + '</option>'))
+    .concat(driveDayOptions.map(o => '<option value="drive:' + o.fromStopId + ':' + o.toStopId + '"' +
+      (site.assoc && site.assoc.type === 'driveday' && site.assoc.fromStopId === o.fromStopId && site.assoc.toStopId === o.toStopId ? ' selected' : '') +
+      '>' + escapeHtml(o.label) + '</option>'))
+    .join('');
+}
+
+// Builds one site/activity card — used both nested under its campground/drive day and
+// in the "Unassigned" list. Changing its association moves it, so that always triggers
+// a full re-render (renderTripDetail) rather than just updating this one card in place.
+function renderTripSiteCard(option, site) {
+  const pin = getPin(site.pinId);
+  const p = pin ? effectivePin(pin) : null;
+  const card = document.createElement('div');
+  card.className = 'list-card';
+  card.style.cursor = 'default';
+  card.style.flexDirection = 'column';
+  card.style.alignItems = 'stretch';
+
+  card.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;">' +
+      '<div class="list-card-main">' +
+        '<div class="list-card-name">' + escapeHtml(p ? p.name : '(pin no longer available)') + '</div>' +
+        '<div class="list-card-meta">' + (p ? escapeHtml(p.category + (p.subcategory ? ' · ' + p.subcategory : '')) : '') + '</div>' +
+      '</div>' +
+      '<button data-act="remove" type="button" title="Remove" style="color:#b5493b;flex-shrink:0;background:none;border:none;font-size:18px;cursor:pointer;">&times;</button>' +
+    '</div>' +
+    '<div class="field-row" style="margin:6px 0 0;">' +
+      '<select data-act="assoc">' + buildSiteAssocOptions(option, site) + '</select>' +
+    '</div>' +
+    '<div class="hint" data-act="distance" style="margin:2px 0 0;"></div>' +
+    '<div class="price-row" style="margin-top:6px;">' +
+      '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Date:</label>' +
+      '<input type="date" data-act="date" value="' + (site.date || '') + '">' +
+    '</div>';
+
+  card.querySelector('[data-act="remove"]').addEventListener('click', () => {
+    option.sites = option.sites.filter(s => s !== site);
+    saveTrips(TRIPS);
+    renderTripDetail();
+  });
+  card.querySelector('[data-act="date"]').addEventListener('change', e => { site.date = e.target.value || null; saveTrips(TRIPS); });
+  card.querySelector('[data-act="assoc"]').addEventListener('change', e => {
+    const val = e.target.value;
+    if (!val) {
+      site.assoc = null;
+    } else if (val.indexOf('camp:') === 0) {
+      site.assoc = { type: 'campground', stopId: val.slice(5) };
+    } else if (val.indexOf('drive:') === 0) {
+      const parts = val.split(':');
+      site.assoc = { type: 'driveday', fromStopId: parts[1], toStopId: parts[2] };
+    }
+    saveTrips(TRIPS);
+    renderTripDetail();
+  });
+
+  updateSiteDistanceEl(card.querySelector('[data-act="distance"]'), site, option);
+  return card;
+}
+
+// Renders one collapsible group of nested sites (everything tied to one campground, or
+// to one drive day) — a native <details> so the open/closed state needs no extra markup,
+// remembered across re-renders via collapsedTripGroups so an unrelated edit doesn't
+// snap it back open.
+function renderTripSiteGroup(container, key, label, groupSites, option) {
+  if (!groupSites.length) return;
+  const details = document.createElement('details');
+  details.className = 'trip-site-group';
+  details.open = !collapsedTripGroups.has(key);
+  details.addEventListener('toggle', () => {
+    if (details.open) collapsedTripGroups.delete(key); else collapsedTripGroups.add(key);
+  });
+  const summary = document.createElement('summary');
+  summary.textContent = label + ' (' + groupSites.length + ')';
+  details.appendChild(summary);
+  groupSites.forEach(site => details.appendChild(renderTripSiteCard(option, site)));
+  container.appendChild(details);
+}
+
+// Campgrounds, each followed immediately by the sites/activities tied to it, then any
+// sites tied to the drive day before the next campground — so the whole trip reads
+// top-to-bottom in the order you'll actually experience it.
 function renderTripCampgrounds(option) {
   const container = document.getElementById('trip-stops-list');
   container.innerHTML = '';
@@ -1240,6 +1387,7 @@ function renderTripCampgrounds(option) {
     container.innerHTML = '<div class="field-static">No campgrounds yet — search below to add one.</div>';
     return;
   }
+  const sites = option.sites || [];
   option.stops.forEach((stop, i) => {
     const pin = getPin(stop.pinId);
     const p = pin ? effectivePin(pin) : null;
@@ -1270,8 +1418,12 @@ function renderTripCampgrounds(option) {
     card.querySelector('[data-act="date"]').addEventListener('change', e => { stop.date = e.target.value || null; saveTrips(TRIPS); });
     container.appendChild(card);
 
+    const hereSites = sites.filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id);
+    renderTripSiteGroup(container, 'camp:' + stop.id, 'Sites & activities here', hereSites, option);
+
     if (i < option.stops.length - 1) {
-      const nextPin = getPin(option.stops[i + 1].pinId);
+      const nextStop = option.stops[i + 1];
+      const nextPin = getPin(nextStop.pinId);
       const legEl = document.createElement('div');
       legEl.className = 'hint';
       legEl.style.margin = '2px 0 2px 10px';
@@ -1285,6 +1437,9 @@ function renderTripCampgrounds(option) {
             (leg.estimated ? ' — straight-line est.' : ' drive');
         });
       }
+
+      const driveSites = sites.filter(s => s.assoc && s.assoc.type === 'driveday' && s.assoc.fromStopId === stop.id && s.assoc.toStopId === nextStop.id);
+      renderTripSiteGroup(container, 'drive:' + stop.id + ':' + nextStop.id, 'Along the drive day', driveSites, option);
     }
   });
 }
@@ -1304,98 +1459,32 @@ function removeStop(option, index) {
   option.stops.splice(index, 1);
   (option.sites || []).forEach(site => {
     if (!site.assoc) return;
-    if (site.assoc.type === 'campground' && site.assoc.stopId === removed.id) site.assoc = null;
-    if (site.assoc.type === 'driveday' && (site.assoc.fromStopId === removed.id || site.assoc.toStopId === removed.id)) site.assoc = null;
+    if (site.assoc.type === 'campground' && site.assoc.stopId === removed.id) {
+      site.assoc = null;
+    } else if (site.assoc.type === 'driveday' && (site.assoc.fromStopId === removed.id || site.assoc.toStopId === removed.id)) {
+      site.assoc = null;
+    }
   });
   saveTrips(TRIPS);
   renderTripDetail();
 }
 
-// ---- Sites & Activities: each is tied to one campground stop, or to the "drive day"
-// between two consecutive campground stops, and shows its distance from whichever it's tied to.
+// ---- Unassigned sites & activities: anything not yet tied to a campground or drive day
+// (new additions start here) — everything already tied shows nested above instead.
 function renderTripSites(option) {
   const container = document.getElementById('trip-sites-list');
   container.innerHTML = '';
   const sites = option.sites || [];
+  const unassigned = sites.filter(s => !s.assoc);
   if (!sites.length) {
     container.innerHTML = '<div class="field-static">No sites or activities added yet — search below to add one.</div>';
     return;
   }
-
-  const campOptions = option.stops.map(s => {
-    const pin = getPin(s.pinId);
-    const p = pin ? effectivePin(pin) : null;
-    return { stopId: s.id, label: (p ? p.name : '(removed pin)') + (s.date ? ' (' + s.date + ')' : '') };
-  });
-  const driveDayOptions = [];
-  for (let i = 0; i < option.stops.length - 1; i++) {
-    const a = option.stops[i], b = option.stops[i + 1];
-    const pa = getPin(a.pinId), pb = getPin(b.pinId);
-    driveDayOptions.push({
-      fromStopId: a.id,
-      toStopId: b.id,
-      label: 'Drive day: ' + (pa ? effectivePin(pa).name : '(removed pin)') + ' → ' + (pb ? effectivePin(pb).name : '(removed pin)')
-    });
+  if (!unassigned.length) {
+    container.innerHTML = '<div class="field-static">Everything is assigned — see each one listed under its campground or drive day above.</div>';
+    return;
   }
-
-  sites.forEach((site, i) => {
-    const pin = getPin(site.pinId);
-    const p = pin ? effectivePin(pin) : null;
-    const card = document.createElement('div');
-    card.className = 'list-card';
-    card.style.cursor = 'default';
-    card.style.flexDirection = 'column';
-    card.style.alignItems = 'stretch';
-
-    const selectOptions = ['<option value="">Not yet assigned</option>']
-      .concat(campOptions.map(o => '<option value="camp:' + o.stopId + '"' +
-        (site.assoc && site.assoc.type === 'campground' && site.assoc.stopId === o.stopId ? ' selected' : '') +
-        '>At: ' + escapeHtml(o.label) + '</option>'))
-      .concat(driveDayOptions.map(o => '<option value="drive:' + o.fromStopId + ':' + o.toStopId + '"' +
-        (site.assoc && site.assoc.type === 'driveday' && site.assoc.fromStopId === o.fromStopId && site.assoc.toStopId === o.toStopId ? ' selected' : '') +
-        '>' + escapeHtml(o.label) + '</option>'))
-      .join('');
-
-    card.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;">' +
-        '<div class="list-card-main">' +
-          '<div class="list-card-name">' + escapeHtml(p ? p.name : '(pin no longer available)') + '</div>' +
-          '<div class="list-card-meta">' + (p ? escapeHtml(p.category + (p.subcategory ? ' · ' + p.subcategory : '')) : '') + '</div>' +
-        '</div>' +
-        '<button data-act="remove" type="button" title="Remove" style="color:#b5493b;flex-shrink:0;background:none;border:none;font-size:18px;cursor:pointer;">&times;</button>' +
-      '</div>' +
-      '<div class="field-row" style="margin:6px 0 0;">' +
-        '<select data-act="assoc">' + selectOptions + '</select>' +
-      '</div>' +
-      '<div class="hint" data-act="distance" style="margin:2px 0 0;"></div>' +
-      '<div class="price-row" style="margin-top:6px;">' +
-        '<label style="align-self:center;font-size:12px;color:var(--brown);margin-right:4px;">Date:</label>' +
-        '<input type="date" data-act="date" value="' + (site.date || '') + '">' +
-      '</div>';
-
-    card.querySelector('[data-act="remove"]').addEventListener('click', () => {
-      option.sites.splice(i, 1);
-      saveTrips(TRIPS);
-      renderTripSites(option);
-    });
-    card.querySelector('[data-act="date"]').addEventListener('change', e => { site.date = e.target.value || null; saveTrips(TRIPS); });
-    card.querySelector('[data-act="assoc"]').addEventListener('change', e => {
-      const val = e.target.value;
-      if (!val) {
-        site.assoc = null;
-      } else if (val.indexOf('camp:') === 0) {
-        site.assoc = { type: 'campground', stopId: val.slice(5) };
-      } else if (val.indexOf('drive:') === 0) {
-        const parts = val.split(':');
-        site.assoc = { type: 'driveday', fromStopId: parts[1], toStopId: parts[2] };
-      }
-      saveTrips(TRIPS);
-      updateSiteDistanceEl(card.querySelector('[data-act="distance"]'), site, option);
-    });
-
-    container.appendChild(card);
-    updateSiteDistanceEl(card.querySelector('[data-act="distance"]'), site, option);
-  });
+  unassigned.forEach(site => container.appendChild(renderTripSiteCard(option, site)));
 }
 
 async function updateSiteDistanceEl(el, site, option) {
@@ -1597,7 +1686,10 @@ function populateDistanceSubcatChecks(category) {
 }
 
 function updateAddCampingChecksVisibility(category) {
-  document.getElementById('add-camping-checks').classList.toggle('hidden', category !== 'Camping');
+  const isCamp = category === 'Camping';
+  document.getElementById('add-camping-checks').classList.toggle('hidden', !isCamp);
+  const onlyFields = document.getElementById('add-camping-only-fields');
+  if (onlyFields) onlyFields.classList.toggle('hidden', !isCamp);
 }
 
 function updateAddLocationStatus() {
@@ -1725,8 +1817,8 @@ async function saveAddForm() {
     category: category,
     subcategory: subcategory,
     state: document.getElementById('add-state').value.trim() || null,
-    price_usd: priceVal === '' ? null : parseFloat(priceVal),
-    hookup_types: hookupsRaw.split(',').map(s => s.trim()).filter(Boolean),
+    price_usd: isCampground ? (priceVal === '' ? null : parseFloat(priceVal)) : null,
+    hookup_types: isCampground ? hookupsRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
     url: urlVal || null,
     notes: document.getElementById('add-notes').value || null,
     starlink_friendly: isCampground ? document.getElementById('add-starlink').checked : null,
