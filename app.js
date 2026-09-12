@@ -77,6 +77,7 @@ function loadEdits() {
 }
 function saveEdits(edits) {
   try { localStorage.setItem(EDITS_KEY, JSON.stringify(edits)); } catch (e) { /* ignore */ }
+  scheduleCloudPush();
 }
 let EDITS = loadEdits();
 
@@ -87,8 +88,154 @@ function loadCustomPins() {
 }
 function saveCustomPins(pins) {
   try { localStorage.setItem(CUSTOM_PINS_KEY, JSON.stringify(pins)); } catch (e) { /* ignore */ }
+  scheduleCloudPush();
 }
 let CUSTOM_PINS = loadCustomPins();
+
+// ---------- Cloud sync (Firebase) ----------
+// Keeps edits, custom pins, and trips in sync across devices by mirroring the exact
+// same {edits, customPins, trips} shape used by Export/Import into one shared
+// Firestore document, instead of leaving each device's localStorage as the only copy.
+// If Firebase hasn't been configured yet (FIREBASE_CONFIG still has placeholder
+// values), everything below quietly no-ops and the app behaves exactly as before —
+// local-only, manual Export/Import still works either way.
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyDKfde6k5a8cm_rtZwXgl9GEkzpukllSWc',
+  authDomain: 'map-app-e4424.firebaseapp.com',
+  projectId: 'map-app-e4424',
+  storageBucket: 'map-app-e4424.firebasestorage.app',
+  messagingSenderId: '517323198346',
+  appId: '1:517323198346:web:fb88b3566cd9692cbc8273'
+};
+const CLOUD_COLLECTION = 'campTravelMap';
+const CLOUD_DOC_ID = 'sharedState';
+const cloudSyncEnabled = typeof firebase !== 'undefined' &&
+  !!FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey.indexOf('YOUR_') !== 0;
+
+let cloudDb = null;
+let cloudReady = Promise.resolve(false); // resolves true once signed in and usable
+
+function setSyncStatus(text, isError) {
+  const el = document.getElementById('cloud-sync-status');
+  if (!el) return;
+  if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block';
+  el.textContent = text;
+  el.style.color = isError ? '#b5493b' : '';
+}
+
+if (cloudSyncEnabled) {
+  try {
+    firebase.initializeApp(FIREBASE_CONFIG);
+    cloudDb = firebase.firestore();
+    cloudReady = firebase.auth().signInAnonymously()
+      .then(() => true)
+      .catch(err => {
+        console.error('Cloud sync sign-in failed:', err);
+        setSyncStatus('Cloud sync unavailable (sign-in failed).', true);
+        return false;
+      });
+  } catch (e) {
+    console.error('Cloud sync init failed:', e);
+    cloudReady = Promise.resolve(false);
+  }
+}
+
+function currentCloudPayload() {
+  return { edits: EDITS, customPins: CUSTOM_PINS, trips: TRIPS };
+}
+
+// Immediate, awaited push. Used right before every location.reload() so the write is
+// actually sent (not merely scheduled) before the page navigates away — a debounced
+// push alone would get cancelled by an immediately-following reload. Races a 4s
+// timeout so a slow or offline connection never blocks the reload indefinitely.
+function pushCloudStateNow() {
+  if (!cloudSyncEnabled) return Promise.resolve();
+  setSyncStatus('Syncing...');
+  return cloudReady.then(ok => {
+    if (!ok) return;
+    const docRef = cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID);
+    const write = docRef.set({
+      payloadJson: JSON.stringify(currentCloudPayload()),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    const timeout = new Promise(resolve => setTimeout(resolve, 4000));
+    return Promise.race([write, timeout]);
+  }).then(() => { setSyncStatus('Synced just now.'); })
+    .catch(err => {
+      console.error('Cloud push failed:', err);
+      setSyncStatus('Sync failed — will retry next visit.', true);
+    });
+}
+
+// Debounced push for the common case (an isolated field edit, a checkbox toggle) with
+// no immediately-following reload to race against.
+let cloudPushTimer = null;
+function scheduleCloudPush() {
+  if (!cloudSyncEnabled) return;
+  clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(() => { pushCloudStateNow(); }, 1200);
+}
+
+// Merges a payload pulled from the cloud into current local state. This only ever runs
+// once, at page load, before the user has made any new local changes this session — so
+// "remote has it and local doesn't yet" is a safe, simple rule for what to bring in.
+// Returns true if anything actually changed (caller decides whether to reload).
+function mergeCloudPayload(remote) {
+  let changed = false;
+  if (remote.edits) {
+    Object.keys(remote.edits).forEach(id => {
+      if (!EDITS[id]) { EDITS[id] = remote.edits[id]; changed = true; }
+    });
+    if (changed) saveEdits(EDITS);
+  }
+  if (remote.customPins && remote.customPins.length) {
+    const existingIds = new Set(CUSTOM_PINS.map(p => p.id));
+    let addedPin = false;
+    remote.customPins.forEach(p => {
+      if (!existingIds.has(p.id)) { CUSTOM_PINS.push(p); existingIds.add(p.id); addedPin = true; }
+    });
+    if (addedPin) { saveCustomPins(CUSTOM_PINS); changed = true; }
+  }
+  if (remote.trips && remote.trips.length) {
+    const existingTripIds = new Set(TRIPS.map(t => t.id));
+    let addedTrip = false;
+    remote.trips.forEach(t => {
+      if (!existingTripIds.has(t.id)) { TRIPS.push(t); existingTripIds.add(t.id); addedTrip = true; }
+    });
+    if (addedTrip) { saveTrips(TRIPS); changed = true; }
+  }
+  return changed;
+}
+
+// Pulled once per page load (from init()). Not a live listener by design — Laura's
+// actual use pattern is "edit on one device, check the other later," not simultaneous
+// editing on two devices at once, so a page-load sync is enough without the added
+// complexity (and feedback-loop risk) of a real-time subscription.
+function pullCloudStateOnce() {
+  if (!cloudSyncEnabled) return;
+  cloudReady.then(ok => {
+    if (!ok) return;
+    setSyncStatus('Checking for updates from your other devices...');
+    return cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).get();
+  }).then(snap => {
+    if (!snap) return;
+    if (!snap.exists) { setSyncStatus('Cloud sync is on — no shared data yet.'); return; }
+    const data = snap.data();
+    let remote = {};
+    try { remote = JSON.parse(data.payloadJson || '{}'); } catch (e) { remote = {}; }
+    if (mergeCloudPayload(remote)) {
+      setSyncStatus('Found updates from another device — refreshing...');
+      location.reload();
+    } else {
+      setSyncStatus('Cloud sync is on — you\'re up to date.');
+    }
+  }).catch(err => {
+    console.error('Cloud pull failed:', err);
+    setSyncStatus('Cloud sync is on — could not reach the server just now.', true);
+  });
+}
+
 
 // ---------- Nearby towns/cities (live lookup, cached in the browser) ----------
 // Precomputed near_town/nearest_town_name/nearest_town_miles (from data.js) only ever
@@ -594,7 +741,7 @@ function wireDetailEvents(p) {
     });
   }
 
-  document.getElementById('detail-save-btn').onclick = () => {
+  document.getElementById('detail-save-btn').onclick = async () => {
     const fields = {};
     const newCategory = document.getElementById('edit-category').value;
     fields.category = newCategory;
@@ -634,6 +781,7 @@ function wireDetailEvents(p) {
     const statusChecked = document.getElementById('detail-status-toggle').checked;
     if (fields.is_campground) fields.visited = statusChecked; else fields.done = statusChecked;
     updatePinEdit(p.id, fields);
+    await pushCloudStateNow();
     location.reload();
   };
   document.getElementById('detail-nearby-btn').onclick = () => {
@@ -689,10 +837,11 @@ function wireDetailEvents(p) {
   const editBtn = document.getElementById('detail-edit-pin-btn');
   if (editBtn) editBtn.onclick = () => { closeDetail(); openAddForm(p); };
   const delBtn = document.getElementById('detail-delete-pin-btn');
-  if (delBtn) delBtn.onclick = () => {
+  if (delBtn) delBtn.onclick = async () => {
     if (!confirm('Delete "' + p.name + '"? This can\'t be undone (unless you have an exported backup).')) return;
     CUSTOM_PINS = CUSTOM_PINS.filter(cp => cp.id !== p.id);
     saveCustomPins(CUSTOM_PINS);
+    await pushCloudStateNow();
     location.reload();
   };
 }
@@ -914,6 +1063,7 @@ function loadTrips() {
 }
 function saveTrips(trips) {
   try { localStorage.setItem(TRIPS_KEY, JSON.stringify(trips)); } catch (e) { /* ignore */ }
+  scheduleCloudPush();
 }
 let TRIPS = loadTrips();
 
@@ -1550,7 +1700,7 @@ async function geocodeAddress() {
   }
 }
 
-function saveAddForm() {
+async function saveAddForm() {
   const name = document.getElementById('add-name').value.trim();
   if (!name) { alert('Please enter a name.'); return; }
   if (!addLatLng) { alert('Please set a location by clicking the map or searching an address.'); return; }
@@ -1596,6 +1746,7 @@ function saveAddForm() {
     CUSTOM_PINS.push(pin);
   }
   saveCustomPins(CUSTOM_PINS);
+  await pushCloudStateNow();
   location.reload();
 }
 
@@ -1726,7 +1877,7 @@ function exportEdits() {
 
 function importEditsFile(file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const imported = JSON.parse(reader.result);
       // Backward compatible: older export files were just the bare EDITS object
@@ -1767,6 +1918,7 @@ function importEditsFile(file) {
       }
 
       alert('Edits imported successfully.');
+      await pushCloudStateNow();
       location.reload();
     } catch (e) {
       alert('Could not read that file — is it a valid export from this app?');
@@ -1870,17 +2022,19 @@ function init() {
   });
   document.getElementById('add-geocode-btn').addEventListener('click', geocodeAddress);
   document.getElementById('add-save-btn').addEventListener('click', saveAddForm);
-  document.getElementById('add-delete-btn').addEventListener('click', () => {
+  document.getElementById('add-delete-btn').addEventListener('click', async () => {
     if (!editingPinId) return;
     const p = CUSTOM_PINS.find(cp => cp.id === editingPinId);
     if (!confirm('Delete "' + (p ? p.name : 'this pin') + '"? This can\'t be undone (unless you have an exported backup).')) return;
     CUSTOM_PINS = CUSTOM_PINS.filter(cp => cp.id !== editingPinId);
     saveCustomPins(CUSTOM_PINS);
+    await pushCloudStateNow();
     location.reload();
   });
 
   applyFilters();
   prefetchClimateData();
+  pullCloudStateOnce();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('service-worker.js').catch(() => {});

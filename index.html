@@ -105,6 +105,7 @@
       <button id="import-btn" class="secondary-btn">Import edits</button>
       <input type="file" id="import-file" accept=".json" style="display:none">
       <small class="hint">Your edits and any pins you add are saved in this browser. Export regularly to back them up or move them to another device.</small>
+      <small class="hint" id="cloud-sync-status" style="display:none;"></small>
     </div>
   </aside>
 
@@ -296,6 +297,11 @@
 </div>
 
 <script src="vendor/leaflet/leaflet.js"></script>
+<!-- Cloud sync (optional): only used once Laura's Firebase config is pasted into
+     FIREBASE_CONFIG in app.js — until then the app runs local-only, exactly as before. -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>
