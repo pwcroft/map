@@ -645,12 +645,18 @@ function buildDetailHtml(p) {
   if (p.category === 'Camping' && p.park_type) rows.push('<div class="field-row"><label>Park type</label><div class="field-static">' + escapeHtml(p.park_type) + '</div></div>');
   if (p.category === 'Camping' && p.reservation_timing) rows.push('<div class="field-row"><label>Reservation timing</label><div class="field-static">' + escapeHtml(p.reservation_timing) + '</div></div>');
   if (p.category === 'Camping' && maxNightsText) rows.push('<div class="field-row"><label>Max nights</label><div class="field-static">' + escapeHtml(maxNightsText) + '</div></div>');
+  const isHikePin = p.subcategory === 'Hikes';
+  if (isHikePin && p.hike_rating != null) rows.push('<div class="field-row"><label>Rating</label><div class="field-static">★' + p.hike_rating + '</div></div>');
+  if (isHikePin && p.hike_length_miles != null) rows.push('<div class="field-row"><label>Length</label><div class="field-static">' + p.hike_length_miles + ' mi</div></div>');
+  if (isHikePin && p.hike_difficulty) rows.push('<div class="field-row"><label>Difficulty</label><div class="field-static">' + escapeHtml(p.hike_difficulty) + '</div></div>');
+  if (isHikePin && p.hike_route_type) rows.push('<div class="field-row"><label>Route type</label><div class="field-static">' + escapeHtml(p.hike_route_type) + '</div></div>');
   rows.push('<div class="field-row"><label>' + (p.is_campground ? 'Visited' : 'Done') + '</label><div class="field-static">' + ((p.is_campground ? p.visited : p.done) ? 'Yes' : 'No') + '</div></div>');
   if (p.category === 'Camping') {
     rows.push('<div class="field-row"><label>Price per night</label><div class="field-static">' + (p.price_usd != null ? '$' + p.price_usd : '—') + '</div></div>');
     rows.push('<div class="field-row"><label>Hookups</label><div class="field-static">' + (escapeHtml((p.hookup_types || []).join(', ')) || '—') + '</div></div>');
   }
-  rows.push('<div class="field-row"><label>Website / booking URL</label><div class="field-static">' + (p.url ? '<a href="' + escapeHtml(p.url) + '" target="_blank" rel="noopener">' + escapeHtml(p.url) + '</a>' : '—') + '</div></div>');
+  rows.push('<div class="field-row"><label>' + (isHikePin ? 'AllTrails link' : 'Website / booking URL') + '</label><div class="field-static">' +
+    (p.url ? '<a href="' + escapeHtml(p.url) + '" target="_blank" rel="noopener">' + (isHikePin ? 'View on AllTrails &rarr;' : escapeHtml(p.url)) + '</a>' : '—') + '</div></div>');
   rows.push('<div class="field-row"><label>Notes / best sites</label><div class="field-static" style="white-space:pre-wrap;">' + (p.notes ? escapeHtml(p.notes) : '—') + '</div></div>');
   rows.push('<button id="detail-edit-toggle-btn" class="primary-btn" type="button">&#9998; Edit</button>');
   rows.push('</div>');
@@ -691,7 +697,19 @@ function buildDetailHtml(p) {
     '<label class="checkbox-row"><input type="checkbox" id="detail-bookable" ' + (p.bookable ? 'checked' : '') + '> Bookable</label>' +
     '</div>');
   rows.push('</div>');
-  rows.push('<div class="field-row"><label>Website / booking URL</label><input type="text" id="detail-url" value="' + escapeHtml(p.url || '') + '"></div>');
+  rows.push('<div id="detail-hike-fields">' +
+    '<div class="price-row">' +
+      '<input type="number" id="edit-hike-rating" placeholder="Rating (0-5)" min="0" max="5" step="0.1" value="' + (p.hike_rating != null ? p.hike_rating : '') + '">' +
+      '<input type="number" id="edit-hike-length" placeholder="Length (mi)" min="0" step="0.1" value="' + (p.hike_length_miles != null ? p.hike_length_miles : '') + '">' +
+    '</div>' +
+    '<div class="price-row">' +
+      '<select id="edit-hike-difficulty"><option value="">Difficulty...</option>' +
+        ['Easy', 'Moderate', 'Hard'].map(d => '<option value="' + d + '"' + (p.hike_difficulty === d ? ' selected' : '') + '>' + d + '</option>').join('') +
+      '</select>' +
+      '<input type="text" id="edit-hike-route-type" placeholder="Route type (e.g. Loop)" value="' + escapeHtml(p.hike_route_type || '') + '">' +
+    '</div>' +
+  '</div>');
+  rows.push('<div class="field-row"><label id="detail-url-label">' + (isHikePin ? 'AllTrails (or other) link' : 'Website / booking URL') + '</label><input type="text" id="detail-url" value="' + escapeHtml(p.url || '') + '"></div>');
   rows.push('<div class="field-row"><label>Notes / best sites</label><textarea id="detail-notes">' + escapeHtml(p.notes || '') + '</textarea></div>');
   rows.push('<button id="detail-save-btn" class="primary-btn" type="button">Save changes</button>');
   rows.push('<button id="detail-cancel-btn" class="secondary-btn" type="button">Cancel</button>');
@@ -709,7 +727,16 @@ function buildDetailHtml(p) {
               (h.trailhead_distance_miles != null ? h.trailhead_distance_miles + ' mi from campground' : '') + '</div>' +
             (h.url ? '<a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener">View on AllTrails &rarr;</a>' : '') +
           '</div>' +
-          '<button class="hike-remove-btn" data-hike-index="' + i + '" title="Remove this hike" style="background:none;border:none;color:#b5493b;font-size:18px;cursor:pointer;">&times;</button>' +
+          '<div class="hike-row-actions">' +
+            '<div class="hike-add-menu-wrap">' +
+              '<button class="hike-add-menu-btn" data-hike-index="' + i + '" title="Add to a trip, or as a map pin" type="button">+</button>' +
+              '<div class="hike-add-menu hidden" data-hike-index="' + i + '">' +
+                '<button class="hike-add-to-trip-btn" data-hike-index="' + i + '" type="button">Add to trip</button>' +
+                '<button class="hike-add-pin-btn" data-hike-index="' + i + '" type="button">Add pin</button>' +
+              '</div>' +
+            '</div>' +
+            '<button class="hike-remove-btn" data-hike-index="' + i + '" title="Remove this hike" style="background:none;border:none;color:#b5493b;font-size:18px;cursor:pointer;">&times;</button>' +
+          '</div>' +
         '</div>'
       ).join('');
     rows.push('<div class="field-row"><label>Nearby hikes</label>' +
@@ -762,11 +789,26 @@ function wireDetailEvents(p) {
   const campingFieldsEl = document.getElementById('detail-camping-fields');
   const updateCampingFieldsVisibility = cat => { if (campingFieldsEl) campingFieldsEl.classList.toggle('hidden', cat !== 'Camping'); };
   updateCampingFieldsVisibility(p.category);
+  const hikeFieldsEl = document.getElementById('detail-hike-fields');
+  const urlLabelEl = document.getElementById('detail-url-label');
+  const isHikeCombo = (cat, subcat) => cat === 'Things To Do' && subcat === 'Hikes';
+  const updateHikeFieldsVisibility = (cat, subcat) => {
+    const isHike = isHikeCombo(cat, subcat);
+    if (hikeFieldsEl) hikeFieldsEl.classList.toggle('hidden', !isHike);
+    if (urlLabelEl) urlLabelEl.textContent = isHike ? 'AllTrails (or other) link' : 'Website / booking URL';
+  };
+  updateHikeFieldsVisibility(p.category, p.subcategory);
   const editCategorySel = document.getElementById('edit-category');
   if (editCategorySel) {
     editCategorySel.addEventListener('change', e => {
       populateSubcatOptions(e.target.value, 'edit-subcat-row', 'edit-subcategory', false);
       updateCampingFieldsVisibility(e.target.value);
+      updateHikeFieldsVisibility(e.target.value, document.getElementById('edit-subcategory') ? document.getElementById('edit-subcategory').value : null);
+    });
+  }
+  if (editSubcatSel) {
+    editSubcatSel.addEventListener('change', e => {
+      updateHikeFieldsVisibility(document.getElementById('edit-category').value, e.target.value);
     });
   }
 
@@ -816,6 +858,19 @@ function wireDetailEvents(p) {
       fields.starlink_friendly = null;
       fields.good_for_hatch = null;
       fields.bookable = null;
+    }
+    if (isHikeCombo(newCategory, fields.subcategory)) {
+      const hrVal = document.getElementById('edit-hike-rating').value;
+      fields.hike_rating = hrVal === '' ? null : parseFloat(hrVal);
+      const hlVal = document.getElementById('edit-hike-length').value;
+      fields.hike_length_miles = hlVal === '' ? null : parseFloat(hlVal);
+      fields.hike_difficulty = document.getElementById('edit-hike-difficulty').value || null;
+      fields.hike_route_type = document.getElementById('edit-hike-route-type').value.trim() || null;
+    } else {
+      fields.hike_rating = null;
+      fields.hike_length_miles = null;
+      fields.hike_difficulty = null;
+      fields.hike_route_type = null;
     }
     const urlVal = document.getElementById('detail-url').value.trim();
     fields.url = urlVal || null;
@@ -873,6 +928,36 @@ function wireDetailEvents(p) {
       const currentHikes = (p.nearby_alltrails_hikes || []).filter(h => h !== toRemove);
       updatePinEdit(p.id, { nearby_alltrails_hikes: currentHikes });
       openDetail(p.id);
+    };
+  });
+
+  // "+" next to each hike opens a tiny menu: "Add to trip" (a lightweight, hidden pin at
+  // the campground's own location — quick, no map placement needed) or "Add pin" (a real,
+  // visible map pin she places herself, prefilled with this hike's stats).
+  const displayedHikesForMenu = (p.nearby_alltrails_hikes || []).slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
+  document.querySelectorAll('.hike-add-menu-btn').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      const menu = btn.parentElement.querySelector('.hike-add-menu');
+      document.querySelectorAll('.hike-add-menu').forEach(m => { if (m !== menu) m.classList.add('hidden'); });
+      menu.classList.toggle('hidden');
+    };
+  });
+  document.querySelectorAll('.hike-add-to-trip-btn').forEach(btn => {
+    btn.onclick = () => {
+      const hike = displayedHikesForMenu[parseInt(btn.getAttribute('data-hike-index'), 10)];
+      if (!hike) return;
+      const hikePin = findOrCreateHikePin(p, hike);
+      closeDetail();
+      openTripsTool(hikePin.id);
+    };
+  });
+  document.querySelectorAll('.hike-add-pin-btn').forEach(btn => {
+    btn.onclick = () => {
+      const hike = displayedHikesForMenu[parseInt(btn.getAttribute('data-hike-index'), 10)];
+      if (!hike) return;
+      closeDetail();
+      openAddFormFromHike(hike, p);
     };
   });
 
@@ -1333,11 +1418,22 @@ function renderTripSiteCard(option, site) {
   card.style.flexDirection = 'column';
   card.style.alignItems = 'stretch';
 
+  const isHike = !!(p && p.subcategory === 'Hikes');
+  const hikeMetaParts = [];
+  if (isHike) {
+    if (p.hike_rating != null) hikeMetaParts.push('★' + p.hike_rating);
+    if (p.hike_length_miles != null) hikeMetaParts.push(p.hike_length_miles + ' mi');
+    if (p.hike_difficulty) hikeMetaParts.push(escapeHtml(p.hike_difficulty));
+    if (p.hike_route_type) hikeMetaParts.push(escapeHtml(p.hike_route_type));
+  }
+
   card.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;">' +
       '<div class="list-card-main">' +
         '<div class="list-card-name">' + escapeHtml(p ? p.name : '(pin no longer available)') + '</div>' +
         '<div class="list-card-meta">' + (p ? escapeHtml(p.category + (p.subcategory ? ' · ' + p.subcategory : '')) : '') + '</div>' +
+        (isHike && hikeMetaParts.length ? '<div class="list-card-meta">' + hikeMetaParts.join(' · ') + '</div>' : '') +
+        (isHike && p.url ? '<a href="' + escapeHtml(p.url) + '" target="_blank" rel="noopener">View on AllTrails &rarr;</a>' : '') +
       '</div>' +
       '<button data-act="remove" type="button" title="Remove" style="color:#b5493b;flex-shrink:0;background:none;border:none;font-size:18px;cursor:pointer;">&times;</button>' +
     '</div>' +
@@ -1364,7 +1460,11 @@ function renderTripSiteCard(option, site) {
     const mainEl = card.querySelector('.list-card-main');
     mainEl.style.cursor = 'pointer';
     mainEl.title = 'View pin details';
-    mainEl.addEventListener('click', () => { closeTripsTool(); openDetail(pin.id); });
+    mainEl.addEventListener('click', e => {
+      if (e.target.tagName === 'A') return; // let the AllTrails link navigate on its own
+      closeTripsTool();
+      openDetail(pin.id);
+    });
   }
   card.querySelector('[data-act="assoc"]').addEventListener('change', e => {
     const val = e.target.value;
@@ -1404,22 +1504,20 @@ function renderTripSiteGroup(container, key, label, groupSites, option) {
 }
 
 // Nearby hikes live only as entries inside a campground pin's nearby_alltrails_hikes
-// array (no coordinates or id of their own) — to let one be added as a trip activity
-// tied to that campground, we mirror it into a small synthetic custom pin the very
-// first time it's added (reused after that, keyed off the campground + hike name), so
-// it can ride along on every existing site mechanism: nested cards, map markers,
-// click-through to a detail panel, distance calcs. It's flagged is_hike_ref so it stays
-// out of the main map/list/search and out of the generic trip "add a stop" search —
-// the only way to add one is the picker below, right on the campground it belongs to.
+// array (no coordinates or id of their own) — to quickly add one to a trip as an
+// activity WITHOUT placing it as a real map pin, we mirror it into a small synthetic
+// custom pin the first time it's added (reused after that, keyed off the campground +
+// hike name), so it can ride along on every existing site mechanism: nested cards, map
+// markers, click-through to a detail panel, distance calcs. It's flagged is_hike_ref so
+// it stays out of the main map/list/search — the only way to reach one is "Add to trip"
+// on the hike itself (in the campground pin's Nearby Hikes list) or a trip that already
+// includes it. Hike stats live in the same hike_* fields a real hike pin uses (see
+// saveAddForm/buildDetailHtml), so both kinds of hike pin render identically everywhere.
 function findOrCreateHikePin(campPin, hike) {
   const slug = hike.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '') || 'hike';
   const hikeId = 'hikepin_' + campPin.id + '_' + slug;
   let existing = CUSTOM_PINS.find(cp => cp.id === hikeId);
   if (!existing) {
-    const metaBits = [];
-    if (hike.difficulty) metaBits.push(hike.difficulty);
-    if (hike.length_miles != null) metaBits.push(hike.length_miles + ' mi');
-    if (hike.route_type) metaBits.push(hike.route_type);
     existing = {
       id: hikeId,
       name: hike.name,
@@ -1432,7 +1530,11 @@ function findOrCreateHikePin(campPin, hike) {
       driving_miles_from_pleasanton: campPin.driving_miles_from_pleasanton != null ? campPin.driving_miles_from_pleasanton : null,
       driving_minutes_from_pleasanton: campPin.driving_minutes_from_pleasanton != null ? campPin.driving_minutes_from_pleasanton : null,
       url: hike.url || null,
-      notes: 'Nearby hike near ' + campPin.name + (metaBits.length ? ' — ' + metaBits.join(' · ') : ''),
+      hike_rating: hike.rating != null ? hike.rating : null,
+      hike_length_miles: hike.length_miles != null ? hike.length_miles : null,
+      hike_difficulty: hike.difficulty || null,
+      hike_route_type: hike.route_type || null,
+      notes: 'Nearby hike near ' + campPin.name + (hike.trailhead_distance_miles != null ? ' (' + hike.trailhead_distance_miles + ' mi from the campground)' : ''),
       is_custom: true,
       is_hike_ref: true,
       hike_source_pin_id: campPin.id
@@ -1441,43 +1543,6 @@ function findOrCreateHikePin(campPin, hike) {
     saveCustomPins(CUSTOM_PINS);
   }
   return existing;
-}
-
-// Adds a "+ Add a nearby hike as an activity..." picker under a campground's trip card,
-// listing its nearby_alltrails_hikes (minus any already added to this stop).
-function appendHikePicker(card, option, stop, campP) {
-  const hikes = campP.nearby_alltrails_hikes || [];
-  if (!hikes.length) return;
-  const alreadyAdded = new Set(
-    (option.sites || [])
-      .filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id)
-      .map(s => { const sp = getPin(s.pinId); return sp && sp.is_hike_ref ? sp.name : null; })
-      .filter(Boolean)
-  );
-  const available = hikes.filter(h => !alreadyAdded.has(h.name));
-  const row = document.createElement('div');
-  row.className = 'field-row';
-  row.style.margin = '6px 0 0';
-  if (!available.length) {
-    row.innerHTML = '<div class="hint">All nearby hikes from this pin are already added as activities here.</div>';
-    card.appendChild(row);
-    return;
-  }
-  const select = document.createElement('select');
-  select.innerHTML = '<option value="">+ Add a nearby hike as an activity...</option>' +
-    available.map(h => '<option value="' + escapeHtml(h.name) + '">' + escapeHtml(h.name) + '</option>').join('');
-  select.addEventListener('change', () => {
-    if (!select.value) return;
-    const hike = hikes.find(h => h.name === select.value);
-    if (!hike) return;
-    const hikePin = findOrCreateHikePin(campP, hike);
-    if (!option.sites) option.sites = [];
-    option.sites.push({ id: genId('site'), pinId: hikePin.id, date: null, notes: '', assoc: { type: 'campground', stopId: stop.id } });
-    saveTrips(TRIPS);
-    renderTripDetail();
-  });
-  row.appendChild(select);
-  card.appendChild(row);
 }
 
 // Campgrounds, each followed immediately by the sites/activities tied to it, then any
@@ -1539,10 +1604,6 @@ function renderTripCampgrounds(option) {
       mainEl.addEventListener('click', () => { closeTripsTool(); openDetail(pin.id); });
     }
     container.appendChild(card);
-
-    if (p && (p.nearby_alltrails_hikes || []).length) {
-      appendHikePicker(card, option, stop, p);
-    }
 
     const hereSites = sites.filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id);
     renderTripSiteGroup(container, 'camp:' + stop.id, 'Sites & activities here', hereSites, option);
@@ -1824,11 +1885,13 @@ function renderAllTripsCalendar() {
   const trackDate = d => { if (!minDate || d < minDate) minDate = d; if (!maxDate || d > maxDate) maxDate = d; };
 
   TRIPS.forEach((trip, idx) => {
-    const option = trip.options && trip.options[0];
+    const options = trip.options || [];
     const color = TRIP_COLOR_PALETTE[idx % TRIP_COLOR_PALETTE.length];
+    const multiOption = options.length > 1;
     let hasDates = false;
 
-    if (option) {
+    options.forEach(option => {
+      const tripLabel = multiOption ? trip.name + ' (' + option.name + ')' : trip.name;
       (option.stops || []).forEach(stop => {
         if (!stop.startDate) return;
         hasDates = true;
@@ -1839,7 +1902,7 @@ function renderAllTripsCalendar() {
         const end = stop.endDate && stop.endDate >= start ? stop.endDate : start;
         let cursor = start, guard = 0;
         while (cursor <= end && guard < 90) { // safety cap: no single stay renders more than ~3 months
-          ensureDay(cursor).push({ tripId: trip.id, tripName: trip.name, color: color, kind: 'stop', name: name, pinId: pin ? stop.pinId : null, isStart: cursor === start, isEnd: cursor === end });
+          ensureDay(cursor).push({ tripId: trip.id, tripName: tripLabel, color: color, kind: 'stop', name: name, pinId: pin ? stop.pinId : null, isStart: cursor === start, isEnd: cursor === end });
           trackDate(cursor);
           if (cursor === end) break;
           cursor = addDaysToDateStr(cursor, 1);
@@ -1851,15 +1914,16 @@ function renderAllTripsCalendar() {
         hasDates = true;
         const pin = getPin(site.pinId);
         const p = pin ? effectivePin(pin) : null;
-        ensureDay(site.date).push({ tripId: trip.id, tripName: trip.name, color: color, kind: 'site', name: p ? p.name : '(removed pin)', pinId: pin ? site.pinId : null });
+        ensureDay(site.date).push({ tripId: trip.id, tripName: tripLabel, color: color, kind: 'site', name: p ? p.name : '(removed pin)', pinId: pin ? site.pinId : null });
         trackDate(site.date);
       });
-    }
+    });
 
     const legendItem = document.createElement('div');
     legendItem.className = 'calendar-legend-item';
     legendItem.innerHTML = '<span class="calendar-legend-swatch" style="background:' + color + ';"></span>' +
-      escapeHtml(trip.name) + (hasDates ? '' : ' <span class="hint" style="display:inline;">(no dates set)</span>');
+      escapeHtml(trip.name) + (multiOption ? ' <span class="hint" style="display:inline;">(' + options.length + ' options)</span>' : '') +
+      (hasDates ? '' : ' <span class="hint" style="display:inline;">(no dates set)</span>');
     legendItem.style.cursor = 'pointer';
     legendItem.addEventListener('click', () => jumpToTripFromCalendar(trip.id));
     legend.appendChild(legendItem);
@@ -2110,6 +2174,14 @@ function updateAddCampingChecksVisibility(category) {
   if (onlyFields) onlyFields.classList.toggle('hidden', !isCamp);
 }
 
+function updateAddHikeFieldsVisibility(category, subcategory) {
+  const isHike = category === 'Things To Do' && subcategory === 'Hikes';
+  const onlyFields = document.getElementById('add-hike-only-fields');
+  if (onlyFields) onlyFields.classList.toggle('hidden', !isHike);
+  const urlLabel = document.getElementById('add-url-label');
+  if (urlLabel) urlLabel.textContent = isHike ? 'AllTrails (or other) link' : 'Website / booking URL';
+}
+
 function updateAddLocationStatus() {
   const el = document.getElementById('add-location-status');
   if (addLatLng) {
@@ -2148,22 +2220,28 @@ function initOrResetAddMap(centerLat, centerLng, zoom) {
   }
 }
 
-function openAddForm(editingPin) {
+function openAddForm(editingPin, prefill) {
+  const source = editingPin || prefill || null;
   editingPinId = editingPin ? editingPin.id : null;
-  document.getElementById('add-form-title').textContent = editingPin ? 'Edit pin' : 'Add a new pin';
-  document.getElementById('add-name').value = editingPin ? editingPin.name : '';
-  document.getElementById('add-category').value = editingPin ? editingPin.category : 'Camping';
+  document.getElementById('add-form-title').textContent = editingPin ? 'Edit pin' : (prefill ? 'Add hike pin' : 'Add a new pin');
+  document.getElementById('add-name').value = source ? source.name : '';
+  document.getElementById('add-category').value = source ? source.category : 'Camping';
   populateAddSubcatOptions(document.getElementById('add-category').value);
-  if (editingPin && editingPin.subcategory) document.getElementById('add-subcategory').value = editingPin.subcategory;
+  if (source && source.subcategory) document.getElementById('add-subcategory').value = source.subcategory;
   updateAddCampingChecksVisibility(document.getElementById('add-category').value);
-  document.getElementById('add-starlink').checked = !!(editingPin && editingPin.starlink_friendly);
-  document.getElementById('add-hatch').checked = !!(editingPin && editingPin.good_for_hatch);
-  document.getElementById('add-bookable').checked = !!(editingPin && editingPin.bookable);
-  document.getElementById('add-state').value = (editingPin && editingPin.state) || '';
-  document.getElementById('add-price').value = (editingPin && editingPin.price_usd != null) ? editingPin.price_usd : '';
-  document.getElementById('add-hookups').value = (editingPin && editingPin.hookup_types) ? editingPin.hookup_types.join(', ') : '';
-  document.getElementById('add-url').value = (editingPin && editingPin.url) || '';
-  document.getElementById('add-notes').value = (editingPin && editingPin.notes) || '';
+  updateAddHikeFieldsVisibility(document.getElementById('add-category').value, document.getElementById('add-subcategory').value);
+  document.getElementById('add-starlink').checked = !!(source && source.starlink_friendly);
+  document.getElementById('add-hatch').checked = !!(source && source.good_for_hatch);
+  document.getElementById('add-bookable').checked = !!(source && source.bookable);
+  document.getElementById('add-state').value = (source && source.state) || '';
+  document.getElementById('add-price').value = (source && source.price_usd != null) ? source.price_usd : '';
+  document.getElementById('add-hookups').value = (source && source.hookup_types) ? source.hookup_types.join(', ') : '';
+  document.getElementById('add-hike-rating').value = (source && source.hike_rating != null) ? source.hike_rating : '';
+  document.getElementById('add-hike-length').value = (source && source.hike_length_miles != null) ? source.hike_length_miles : '';
+  document.getElementById('add-hike-difficulty').value = (source && source.hike_difficulty) || '';
+  document.getElementById('add-hike-route-type').value = (source && source.hike_route_type) || '';
+  document.getElementById('add-url').value = (source && source.url) || '';
+  document.getElementById('add-notes').value = (source && source.notes) || '';
   document.getElementById('add-address').value = '';
   document.getElementById('add-delete-btn').classList.toggle('hidden', !editingPin);
 
@@ -2173,13 +2251,34 @@ function openAddForm(editingPin) {
   document.getElementById('add-overlay').classList.remove('hidden');
   setTimeout(() => {
     initOrResetAddMap(
-      editingPin ? editingPin.lat : PLEASANTON.lat,
-      editingPin ? editingPin.lng : PLEASANTON.lng,
-      editingPin ? 11 : 7
+      editingPin ? editingPin.lat : (prefill && prefill.lat != null ? prefill.lat : PLEASANTON.lat),
+      editingPin ? editingPin.lng : (prefill && prefill.lng != null ? prefill.lng : PLEASANTON.lng),
+      editingPin ? 11 : (prefill ? 11 : 7)
     );
     if (editingPin) setAddLocation(editingPin.lat, editingPin.lng);
     updateAddLocationStatus();
   }, 50);
+}
+
+// Opens the Add Pin form pre-filled with a campground's nearby-hike entry, so the user can
+// place it as a real map pin carrying the same hike details (rating/length/difficulty/AllTrails
+// link). Location is intentionally left unset — she places it herself (defaults the map to the
+// source campground's area for convenience).
+function openAddFormFromHike(hike, sourcePin) {
+  const prefill = {
+    name: hike.name,
+    category: 'Things To Do',
+    subcategory: 'Hikes',
+    url: hike.url || null,
+    hike_rating: hike.rating != null ? hike.rating : null,
+    hike_length_miles: hike.length_miles != null ? hike.length_miles : null,
+    hike_difficulty: hike.difficulty || null,
+    hike_route_type: hike.route_type || null,
+    notes: 'Nearby hike near ' + sourcePin.name + (hike.trailhead_distance_miles != null ? ' (' + hike.trailhead_distance_miles + ' mi from the campground)' : ''),
+    lat: sourcePin.lat,
+    lng: sourcePin.lng
+  };
+  openAddForm(null, prefill);
 }
 
 function closeAddForm() {
@@ -2219,8 +2318,11 @@ async function saveAddForm() {
   const subcats = CATEGORY_SUBCATS[category];
   const subcategory = subcats ? document.getElementById('add-subcategory').value : null;
   const isCampground = category === 'Camping';
+  const isHike = category === 'Things To Do' && subcategory === 'Hikes';
   const priceVal = document.getElementById('add-price').value;
   const hookupsRaw = document.getElementById('add-hookups').value;
+  const hikeRatingVal = document.getElementById('add-hike-rating').value;
+  const hikeLengthVal = document.getElementById('add-hike-length').value;
   const urlVal = document.getElementById('add-url').value.trim();
   const straightMiles = haversineMiles(PLEASANTON.lat, PLEASANTON.lng, addLatLng.lat, addLatLng.lng);
 
@@ -2242,6 +2344,10 @@ async function saveAddForm() {
     starlink_friendly: isCampground ? document.getElementById('add-starlink').checked : null,
     good_for_hatch: isCampground ? document.getElementById('add-hatch').checked : null,
     bookable: isCampground ? document.getElementById('add-bookable').checked : null,
+    hike_rating: isHike ? (hikeRatingVal === '' ? null : parseFloat(hikeRatingVal)) : null,
+    hike_length_miles: isHike ? (hikeLengthVal === '' ? null : parseFloat(hikeLengthVal)) : null,
+    hike_difficulty: isHike ? (document.getElementById('add-hike-difficulty').value || null) : null,
+    hike_route_type: isHike ? (document.getElementById('add-hike-route-type').value.trim() || null) : null,
     is_campground: isCampground,
     visited: existing ? existing.visited : (isCampground ? false : null),
     done: existing ? existing.done : (!isCampground ? false : null),
@@ -2534,6 +2640,10 @@ function init() {
   document.getElementById('add-category').addEventListener('change', e => {
     populateAddSubcatOptions(e.target.value);
     updateAddCampingChecksVisibility(e.target.value);
+    updateAddHikeFieldsVisibility(e.target.value, document.getElementById('add-subcategory').value);
+  });
+  document.getElementById('add-subcategory').addEventListener('change', e => {
+    updateAddHikeFieldsVisibility(document.getElementById('add-category').value, e.target.value);
   });
   document.getElementById('add-geocode-btn').addEventListener('click', geocodeAddress);
   document.getElementById('add-save-btn').addEventListener('click', saveAddForm);
@@ -2545,6 +2655,10 @@ function init() {
     saveCustomPins(CUSTOM_PINS);
     await pushCloudStateNow();
     location.reload();
+  });
+
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.hike-add-menu').forEach(m => m.classList.add('hidden'));
   });
 
   applyFilters();
