@@ -227,6 +227,8 @@
         <button id="trip-view-calendar" type="button">Calendar</button>
       </div>
 
+      <button id="trip-print-btn" class="secondary-btn" type="button">🖨️ Print trip summary</button>
+
       <div id="trip-list-mode">
         <h3 class="trip-section-heading">Your Trip</h3>
         <small class="hint">Sites and activities show nested right under the campground (or drive day) you tie them to — click a group's title to collapse or expand it.</small>
@@ -323,6 +325,10 @@
     <button id="add-delete-btn" class="secondary-btn hidden" style="color:#b5493b;">Delete this pin</button>
   </div>
 </div>
+
+<!-- Off-screen except when printing (see the @media print rule in style.css) — populated
+     by openTripPrintSummary() right before window.print() is called. -->
+<div id="trip-print-view"></div>
 
 <script src="vendor/leaflet/leaflet.js"></script>
 <!-- Cloud sync (optional): only used once Laura's Firebase config is pasted into

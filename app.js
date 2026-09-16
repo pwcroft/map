@@ -1514,6 +1514,19 @@ function renderTripSiteCard(option, site) {
   return card;
 }
 
+// Sorts a list of trip sites/activities by date ascending, with undated ones pushed to
+// the end (in whatever order they were already in) — used everywhere sites are listed
+// (nested under a campground/drive day, unassigned, and the printable summary) so a
+// dated activity always shows in its right place in the timeline.
+function sortSitesByDate(list) {
+  return list.slice().sort((a, b) => {
+    if (a.date && b.date) return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+    if (a.date && !b.date) return -1;
+    if (!a.date && b.date) return 1;
+    return 0;
+  });
+}
+
 // Renders one collapsible group of nested sites (everything tied to one campground, or
 // to one drive day) — a native <details> so the open/closed state needs no extra markup,
 // remembered across re-renders via collapsedTripGroups so an unrelated edit doesn't
@@ -1635,7 +1648,7 @@ function renderTripCampgrounds(option) {
     }
     container.appendChild(card);
 
-    const hereSites = sites.filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id);
+    const hereSites = sortSitesByDate(sites.filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id));
     renderTripSiteGroup(container, 'camp:' + stop.id, 'Sites & activities here', hereSites, option);
 
     if (i < option.stops.length - 1) {
@@ -1655,7 +1668,7 @@ function renderTripCampgrounds(option) {
         });
       }
 
-      const driveSites = sites.filter(s => s.assoc && s.assoc.type === 'driveday' && s.assoc.fromStopId === stop.id && s.assoc.toStopId === nextStop.id);
+      const driveSites = sortSitesByDate(sites.filter(s => s.assoc && s.assoc.type === 'driveday' && s.assoc.fromStopId === stop.id && s.assoc.toStopId === nextStop.id));
       renderTripSiteGroup(container, 'drive:' + stop.id + ':' + nextStop.id, 'Along the drive day', driveSites, option);
     }
   });
@@ -1701,7 +1714,87 @@ function renderTripSites(option) {
     container.innerHTML = '<div class="field-static">Everything is assigned — see each one listed under its campground or drive day above.</div>';
     return;
   }
-  unassigned.forEach(site => container.appendChild(renderTripSiteCard(option, site)));
+  sortSitesByDate(unassigned).forEach(site => container.appendChild(renderTripSiteCard(option, site)));
+}
+
+// ---- Printable trip summary: campground stays in trip order (with their dates),
+// each followed by its tied activities sorted by date, drive-day-tied activities shown
+// as their own "Drive day: A -> B" section in the right spot in the timeline (between
+// the two campgrounds), and anything not yet assigned to either listed at the end so
+// nothing gets silently left off the page.
+function formatDateForPrint(d) {
+  if (!d) return null;
+  const parts = d.split('-').map(Number);
+  return new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatStopDateRangeForPrint(stop) {
+  if (!stop.startDate && !stop.endDate) return 'Dates not set';
+  if (!stop.endDate || stop.endDate === stop.startDate) return formatDateForPrint(stop.startDate);
+  return formatDateForPrint(stop.startDate) + ' – ' + formatDateForPrint(stop.endDate);
+}
+
+function buildPrintBulletsHtml(sortedSites) {
+  if (!sortedSites.length) return '<div class="print-empty">No activities scheduled.</div>';
+  return '<ul>' + sortedSites.map(site => {
+    const pin = getPin(site.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    const name = p ? p.name : '(removed pin)';
+    const dateLabel = site.date ? formatDateForPrint(site.date) : 'No date';
+    return '<li>' + escapeHtml(dateLabel) + ' — ' + escapeHtml(name) + '</li>';
+  }).join('') + '</ul>';
+}
+
+function buildTripPrintHtml(trip, option) {
+  const sites = option.sites || [];
+  const parts = [];
+  parts.push('<h1>' + escapeHtml(trip.name) + '</h1>');
+  parts.push('<div class="print-subtitle">' + escapeHtml(option.name) + '</div>');
+
+  if (!option.stops.length) {
+    parts.push('<div class="print-empty">No campgrounds added to this trip option yet.</div>');
+  }
+
+  option.stops.forEach((stop, i) => {
+    const pin = getPin(stop.pinId);
+    const p = pin ? effectivePin(pin) : null;
+    const hereSites = sortSitesByDate(sites.filter(s => s.assoc && s.assoc.type === 'campground' && s.assoc.stopId === stop.id));
+    parts.push('<div class="print-group">');
+    parts.push('<h2>' + escapeHtml(p ? p.name : '(removed pin)') + ' — ' + escapeHtml(formatStopDateRangeForPrint(stop)) + '</h2>');
+    parts.push(buildPrintBulletsHtml(hereSites));
+    parts.push('</div>');
+
+    if (i < option.stops.length - 1) {
+      const nextStop = option.stops[i + 1];
+      const nextPin = getPin(nextStop.pinId);
+      const nextP = nextPin ? effectivePin(nextPin) : null;
+      const driveSites = sortSitesByDate(sites.filter(s => s.assoc && s.assoc.type === 'driveday' && s.assoc.fromStopId === stop.id && s.assoc.toStopId === nextStop.id));
+      if (driveSites.length) {
+        parts.push('<div class="print-group print-driveday">');
+        parts.push('<h2>Drive day: ' + escapeHtml(p ? p.name : '?') + ' &rarr; ' + escapeHtml(nextP ? nextP.name : '?') + '</h2>');
+        parts.push(buildPrintBulletsHtml(driveSites));
+        parts.push('</div>');
+      }
+    }
+  });
+
+  const unassigned = sortSitesByDate(sites.filter(s => !s.assoc));
+  if (unassigned.length) {
+    parts.push('<div class="print-group">');
+    parts.push('<h2>Not Yet Assigned</h2>');
+    parts.push(buildPrintBulletsHtml(unassigned));
+    parts.push('</div>');
+  }
+
+  return parts.join('');
+}
+
+function openTripPrintSummary() {
+  const trip = getActiveTrip();
+  const option = getActiveOption();
+  if (!trip || !option) return;
+  document.getElementById('trip-print-view').innerHTML = buildTripPrintHtml(trip, option);
+  window.print();
 }
 
 async function updateSiteDistanceEl(el, site, option) {
@@ -2659,6 +2752,7 @@ function init() {
   document.getElementById('trip-view-list').addEventListener('click', () => setTripViewMode('list'));
   document.getElementById('trip-view-map').addEventListener('click', () => setTripViewMode('map'));
   document.getElementById('trip-view-calendar').addEventListener('click', () => setTripViewMode('calendar'));
+  document.getElementById('trip-print-btn').addEventListener('click', openTripPrintSummary);
 
   document.getElementById('export-btn').addEventListener('click', exportEdits);
   document.getElementById('import-btn').addEventListener('click', () => document.getElementById('import-file').click());
