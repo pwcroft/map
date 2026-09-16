@@ -266,6 +266,21 @@ function pullCloudStateOnce() {
   });
 }
 
+// Manual "Sync now" button. The two automatic paths (a debounced push after any save,
+// a pull-once on page load) normally keep devices in sync without her having to think
+// about it -- but a push is a full overwrite of the shared doc with whatever THIS
+// device's local data is (not a merge), so if something else ever pushes stale/empty
+// data (as an unrelated bug once did during testing), the fix is to open the app on
+// the device that actually has the right data and push it back up manually. Push what
+// this device has, then immediately re-pull so this device also picks up anything new
+// (a reload happens automatically if the pull finds something to merge in).
+function syncNowClicked() {
+  const btn = document.getElementById('cloud-sync-now-btn');
+  if (btn) btn.disabled = true;
+  pushCloudStateNow().then(() => pullCloudStateOnce()).finally(() => {
+    if (btn) btn.disabled = false;
+  });
+}
 
 // ---------- Nearby towns/cities (live lookup, cached in the browser) ----------
 // Precomputed near_town/nearest_town_name/nearest_town_miles (from data.js) only ever
@@ -2787,6 +2802,13 @@ function init() {
 
   applyFilters();
   prefetchClimateData();
+  if (cloudSyncEnabled) {
+    const syncBtn = document.getElementById('cloud-sync-now-btn');
+    if (syncBtn) {
+      syncBtn.style.display = '';
+      syncBtn.addEventListener('click', syncNowClicked);
+    }
+  }
   pullCloudStateOnce();
 
   if ('serviceWorker' in navigator) {
