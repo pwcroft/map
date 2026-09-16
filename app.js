@@ -179,32 +179,62 @@ function scheduleCloudPush() {
 
 // Merges a payload pulled from the cloud into current local state. This only ever runs
 // once, at page load, before the user has made any new local changes this session — so
-// "remote has it and local doesn't yet" is a safe, simple rule for what to bring in.
+// it's safe to simply adopt whatever the remote copy says whenever it differs from the
+// local copy (matches her actual usage pattern: edit on one device, check the other
+// later, never two devices editing at once). For each id that exists on both sides, this
+// deep-replaces the local entry with the remote one when they differ — not just "bring
+// in ids local doesn't have yet" — so edits to something ALREADY synced (e.g. a new
+// activity added to a trip that already exists on both devices) actually come through,
+// instead of only ever picking up brand-new trips/pins/edits.
 // Returns true if anything actually changed (caller decides whether to reload).
 function mergeCloudPayload(remote) {
   let changed = false;
+
   if (remote.edits) {
+    let editsChanged = false;
     Object.keys(remote.edits).forEach(id => {
-      if (!EDITS[id]) { EDITS[id] = remote.edits[id]; changed = true; }
+      if (JSON.stringify(EDITS[id]) !== JSON.stringify(remote.edits[id])) {
+        EDITS[id] = remote.edits[id];
+        editsChanged = true;
+      }
     });
-    if (changed) saveEdits(EDITS);
+    if (editsChanged) { saveEdits(EDITS); changed = true; }
   }
+
   if (remote.customPins && remote.customPins.length) {
-    const existingIds = new Set(CUSTOM_PINS.map(p => p.id));
-    let addedPin = false;
+    const localById = new Map(CUSTOM_PINS.map(p => [p.id, p]));
+    let pinsChanged = false;
     remote.customPins.forEach(p => {
-      if (!existingIds.has(p.id)) { CUSTOM_PINS.push(p); existingIds.add(p.id); addedPin = true; }
+      const existing = localById.get(p.id);
+      if (!existing) {
+        CUSTOM_PINS.push(p);
+        localById.set(p.id, p);
+        pinsChanged = true;
+      } else if (JSON.stringify(existing) !== JSON.stringify(p)) {
+        Object.assign(existing, p);
+        pinsChanged = true;
+      }
     });
-    if (addedPin) { saveCustomPins(CUSTOM_PINS); changed = true; }
+    if (pinsChanged) { saveCustomPins(CUSTOM_PINS); changed = true; }
   }
+
   if (remote.trips && remote.trips.length) {
-    const existingTripIds = new Set(TRIPS.map(t => t.id));
-    let addedTrip = false;
+    const localById = new Map(TRIPS.map(t => [t.id, t]));
+    let tripsChanged = false;
     remote.trips.forEach(t => {
-      if (!existingTripIds.has(t.id)) { TRIPS.push(t); existingTripIds.add(t.id); addedTrip = true; }
+      const existing = localById.get(t.id);
+      if (!existing) {
+        TRIPS.push(t);
+        localById.set(t.id, t);
+        tripsChanged = true;
+      } else if (JSON.stringify(existing) !== JSON.stringify(t)) {
+        Object.assign(existing, t);
+        tripsChanged = true;
+      }
     });
-    if (addedTrip) { saveTrips(TRIPS); changed = true; }
+    if (tripsChanged) { saveTrips(TRIPS); changed = true; }
   }
+
   return changed;
 }
 
