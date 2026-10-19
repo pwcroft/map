@@ -14,7 +14,7 @@ const COOL_SEASON_MONTHS = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 
 const CATEGORY_ORDER = ['Camping', 'Things To Do', 'Food & Drink'];
 const CAMPING_SUBCATS = ['Public', 'Private', 'Boondocking', 'Harvest Host'];
-const THINGSTODO_SUBCATS = ['State / Nat Parks', 'Points of Interest', 'Hikes', 'Scenic Drives', 'Sites', 'Hot Springs', 'Swim Area', 'Adventures'];
+const THINGSTODO_SUBCATS = ['State / Nat Parks', 'Points of Interest', 'Hikes', 'Scenic Drives', 'Sites', 'Hot Springs', 'Swim Area', 'Adventures', 'Kayaking'];
 const FOODDRINK_SUBCATS = ['Food', 'Drinks'];
 
 const CATEGORY_SUBCATS = {
@@ -43,7 +43,8 @@ const TYPE_ICONS = {
     'Sites': '🏛️',
     'Hot Springs': '♨️',
     'Swim Area': '🏊',
-    'Adventures': '🧭'
+    'Adventures': '🧭',
+    'Kayaking': '🛶'
   },
   'Food & Drink': { 'Food': '🍽️', 'Drinks': '🍺' }
 };
