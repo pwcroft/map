@@ -2509,7 +2509,12 @@ async function saveAddForm() {
 function buildCategoryFilters() {
   const container = document.getElementById('category-filters');
   const counts = {};
-  allPins().forEach(p => { counts[p.category] = (counts[p.category] || 0) + 1; });
+  // Count against each pin's EFFECTIVE category (base data + her saved edits merged), not
+  // just the base dataset's original category -- otherwise editing an existing pin's
+  // category/type (e.g. changing Waldo Lake to Things To Do > Kayaking) would filter and
+  // display correctly everywhere else in the app, but never make its new type's checkbox
+  // appear here, since this count would still be based on the pin's original, un-edited data.
+  allPins().forEach(p => { const cat = effectivePin(p).category; counts[cat] = (counts[cat] || 0) + 1; });
   CATEGORY_ORDER.forEach(cat => {
     if (!counts[cat]) return;
     const label = document.createElement('label');
@@ -2526,7 +2531,9 @@ function buildCategoryFilters() {
 function buildSubcatFilters(containerId, subcats, categoryName, targetSet) {
   const container = document.getElementById(containerId);
   const counts = {};
-  allPins().forEach(p => { if (p.category === categoryName) counts[p.subcategory] = (counts[p.subcategory] || 0) + 1; });
+  // Same fix as buildCategoryFilters above: count against the effective (edits-merged)
+  // category/subcategory, not the base dataset's original values.
+  allPins().forEach(p => { const ep = effectivePin(p); if (ep.category === categoryName) counts[ep.subcategory] = (counts[ep.subcategory] || 0) + 1; });
   subcats.forEach(sc => {
     if (!counts[sc]) return;
     const label = document.createElement('label');
